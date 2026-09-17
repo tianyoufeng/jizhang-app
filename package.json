@@ -9,7 +9,8 @@
     "preview": "vite preview --host",
     "apk": "npm run build && npx cap sync android && node tools/build-apk.mjs",
     "icons": "node tools/make-icons.mjs",
-    "verify": "node tools/verify.mjs"
+    "verify": "node tools/verify.mjs",
+    "push": "node tools/push-to-github.mjs"
   },
   "dependencies": {
     "@capacitor/android": "^6.2.0",

@@ -138,6 +138,25 @@ android/app/build/outputs/apk/release/app-release.apk
 npm run icons      # 自动生成安卓要的全部尺寸
 ```
 
+### 推送到 GitHub
+
+```bash
+git add -A
+git commit -m "说明这次改了什么"
+npm run push
+```
+
+> **为什么用 `npm run push` 而不是 `git push`：**
+> 这台电脑上 `github.com` 连不上（被墙），普通的 `git push` 会超时失败。
+> 但 `api.github.com` 是通的，所以 `tools/push-to-github.mjs` 改走 GitHub 的
+> REST 接口，把本地提交逐个复刻上去。
+>
+> 关键是它复刻的是**提交本身**（内容、作者、时间、父子关系都照抄），
+> 因为 git 的哈希是按内容算的，所以远程算出来的哈希和本地完全一样 ——
+> 两边不会分叉。脚本跑完会打印一行确认，说哈希一致就没问题。
+>
+> 如果哪天网络能正常访问 github.com 了，直接 `git push` 也能用，两种方式不冲突。
+
 ---
 
 ## 五、签名密钥（重要）
@@ -175,7 +194,8 @@ APK 是签过名的。**`android/jizhang.keystore` 和 `android/keystore.propert
 ├── tools/
 │   ├── build-apk.mjs       一键打包
 │   ├── make-icons.mjs      SVG → 各尺寸安卓图标和启动画面
-│   └── verify.mjs          53 项自动化走查
+│   ├── verify.mjs          53 项自动化走查
+│   └── push-to-github.mjs  走 GitHub API 推送（绕开被墙的 github.com）
 ├── docs/screenshots/       README 用的截图
 └── android/                安卓工程（Capacitor 生成 + 少量手工配置）
 ```
