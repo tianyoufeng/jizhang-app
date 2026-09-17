@@ -48,6 +48,39 @@ async function api(path, body, method = 'POST') {
 const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
 const gitBuf = (...args) => execFileSync('git', args, { maxBuffer: 256 * 1024 * 1024 });
 
+/**
+ * 取出提交的原始消息（连结尾换行一起）。
+ * 不能图省事用 `git log --format=%B`，那个会被 trim 掉结尾的换行，
+ * 而换行也是提交对象的一部分 —— 少这一个字节，算出来的哈希就和本地对不上，
+ * 本地和远程就分叉了。
+ */
+function rawMessage(sha) {
+  const raw = gitBuf('cat-file', 'commit', sha).toString('utf8');
+  const i = raw.indexOf('\n\n');
+  if (i < 0) throw new Error(`提交 ${sha} 格式不对，找不到消息部分`);
+  return raw.slice(i + 2);
+}
+
+/**
+ * GitHub 不允许在一个没有任何提交的仓库上创建 blob，
+ * 所以空仓库要先塞一个占位提交把它「激活」。
+ * 这个占位提交最后会被强制覆盖掉，不影响最终历史。
+ */
+async function ensureRepoHasCommit() {
+  try {
+    await api(`/repos/${REPO}/git/refs/heads/${BRANCH}`, null, 'GET');
+    return;
+  } catch {
+    /* 空仓库，继续往下走 */
+  }
+  await api(
+    `/repos/${REPO}/contents/.gitkeep`,
+    { message: '临时占位，稍后会被覆盖', content: Buffer.from('\n').toString('base64') },
+    'PUT'
+  );
+  console.log('（仓库本来是空的，先建了个占位提交，最后会被覆盖掉）\n');
+}
+
 /** 解析 `git ls-tree -r -z` 的输出 */
 function listTree(sha) {
   return gitBuf('ls-tree', '-r', '-z', sha)
@@ -69,6 +102,8 @@ if (!commits.length) throw new Error('本地还没有任何提交');
 console.log(`仓库：${REPO}`);
 console.log(`分支：${BRANCH}`);
 console.log(`提交：${commits.length} 个（从旧到新）`);
+
+await ensureRepoHasCommit();
 
 /* ---------------- 2. 上传所有文件内容（同内容只传一次） ---------------- */
 const needed = new Map(); // blob sha -> 该 blob 出现的路径（仅用于日志）
@@ -121,7 +156,7 @@ for (const c of commits) {
   const remoteParents = parents.map((p) => remoteOf.get(p));
 
   const created = await api(`/repos/${REPO}/git/commits`, {
-    message: git('log', '-1', '--format=%B', c),
+    message: rawMessage(c),
     tree: tree.sha,
     parents: remoteParents,
     author: { name: an, email: ae, date: ad },
