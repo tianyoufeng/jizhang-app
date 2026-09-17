@@ -1,0 +1,9 @@
+{
+  "appId": "com.jizhang.local",
+  "appName": "记账本",
+  "webDir": "dist",
+  "android": {
+    "allowMixedContent": false,
+    "webContentsDebuggingEnabled": false
+  }
+}

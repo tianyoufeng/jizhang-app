@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#3b7dd8" />
+  <title>记账本</title>
+  <link rel="icon" href="./icon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/src/styles.css" />
+</head>
+<body>
+  <div id="app">
+    <header id="topbar">
+      <button id="ledgerSwitch" class="ledger-btn" type="button" aria-label="切换账本">
+        <span id="ledgerName">日常账本</span>
+        <svg class="chev" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M7 10l5 5 5-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <h1 id="pageTitle">记账</h1>
+      <button id="themeToggle" class="icon-btn" type="button" aria-label="切换深浅色">
+        <span id="themeIcon">🌙</span>
+      </button>
+    </header>
+
+    <main id="view"></main>
+
+    <nav id="tabbar">
+      <button class="tab active" data-tab="record" type="button"><span class="tab-ico">✏️</span><span class="tab-txt">记账</span></button>
+      <button class="tab" data-tab="list" type="button"><span class="tab-ico">📋</span><span class="tab-txt">账单</span></button>
+      <button class="tab" data-tab="stats" type="button"><span class="tab-ico">📊</span><span class="tab-txt">统计</span></button>
+      <button class="tab" data-tab="settings" type="button"><span class="tab-ico">⚙️</span><span class="tab-txt">设置</span></button>
+    </nav>
+  </div>
+
+  <div id="sheetRoot"></div>
+  <div id="toastRoot"></div>
+  <div id="dialogRoot"></div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,25 @@
+{
+  "name": "jizhang-app",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --host",
+    "apk": "npm run build && npx cap sync android && node tools/build-apk.mjs",
+    "icons": "node tools/make-icons.mjs",
+    "verify": "node tools/verify.mjs"
+  },
+  "dependencies": {
+    "@capacitor/android": "^6.2.0",
+    "@capacitor/core": "^6.2.0",
+    "@capacitor/filesystem": "^6.0.2",
+    "@capacitor/share": "^6.0.3"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.2.0",
+    "puppeteer-core": "^25.11.0",
+    "vite": "^5.4.11"
+  }
+}

@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- 整块图标：给老安卓（8.0 以前）用的，设计要铺满 -->
+  <rect width="1024" height="1024" rx="228" fill="#3b7dd8"/>
+  <rect x="204" y="292" width="616" height="444" rx="94" fill="#ffffff"/>
+  <rect x="204" y="392" width="616" height="64" fill="#cfe0f7"/>
+  <rect x="296" y="518" width="252" height="48" rx="24" fill="#3b7dd8"/>
+  <rect x="296" y="608" width="170" height="48" rx="24" fill="#9fbbe6"/>
+  <circle cx="718" cy="632" r="54" fill="#3b7dd8"/>
+</svg>

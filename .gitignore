@@ -1,0 +1,36 @@
+# ============ 签名密钥：绝对不能提交 ============
+# 仓库是公开的。密钥和口令一旦泄露，任何人都能签一个假 App 覆盖安装到你手机上。
+# 这两个文件请自己另存一份到网盘，也请不要删掉下面这两行规则。
+android/jizhang.keystore
+android/keystore.properties
+
+# ============ 依赖和构建产物 ============
+node_modules/
+dist/
+
+# 安卓构建产物
+android/.gradle/
+android/build/
+android/app/build/
+android/capacitor-cordova-android-plugins/
+
+# 每台机器自己的配置（安卓 SDK 路径）
+android/local.properties
+
+# 每次 npx cap sync 都会重新生成
+android/app/src/main/assets/public/
+android/app/src/main/assets/capacitor.config.json
+android/app/src/main/assets/capacitor.plugins.json
+android/app/src/main/res/xml/config.xml
+
+# android 目录下编译出来的 APK
+android/**/*.apk
+
+# ============ 走查工具的临时输出 ============
+tools/shots/
+tools/report*.txt
+
+# ============ 系统杂物 ============
+.DS_Store
+Thumbs.db
+*.log
