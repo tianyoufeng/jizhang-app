@@ -2,7 +2,7 @@
 
 一个只在自己手机上用的记账 App。
 
-**当前版本：v1.2** —— 在 v1.1 的基础上加了**分类预算**：给单个支出分类设月度上限，记账页的分类格上用一个小圆点显示超没超支（详见第七节）。
+**当前版本：v1.3** —— 把 App 图标换成了 **￥**（金 → 橙渐变）；上一版 v1.2 加了**分类预算**：给单个支出分类设月度上限，记账页的分类格上用一个小圆点显示超没超支。两版都在第七节。
 
 **不联网、不上传、不要账号、不要服务器** —— 所有数据都只存在手机本地，不装任何东西也能离线用。
 
@@ -30,18 +30,18 @@
 
 手机需要**安卓 5.1 以上**。
 
-1. 把 `记账本-v1.2.apk` 下载到手机（或者用数据线从电脑拷过去）
+1. 把 `记账本-v1.3.apk` 下载到手机（或者用数据线从电脑拷过去）
 2. 在手机上点开这个文件
 3. 手机会提示「不允许安装未知来源的应用」。去 **设置 → 安全 → 安装未知应用**，允许你刚才用的那个程序（文件管理器 / 浏览器 / 微信）安装，然后再点一次
 4. 装好后桌面上会出现「记账本」图标
 
 > ⚠️ 根目录里那个 `记账本-v1.0.apk` 是**优化之前**的旧版，别装错了。
-> 现在用的是 `记账本-v1.2.apk`（`versionName=1.2`、`versionCode=3`）。
+> 现在用的是 `记账本-v1.3.apk`（`versionName=1.3`、`versionCode=4`）。
 >
-> **升级路径**：v1.1 → v1.2 **用的是同一把签名密钥**，直接把新包装上去就行，
+> **升级路径**：v1.1 → v1.2 → v1.3 用的都是**同一把签名密钥**，直接把新包装上去就行，
 > 不用卸载，数据也不会动。
 >
-> 只有**从 v1.0 往上装**（不管是装 v1.1 还是 v1.2）才会报签名冲突 ——
+> 只有**从 v1.0 往上装**（不管是装 v1.1、v1.2 还是 v1.3）才会报签名冲突 ——
 > 因为签 v1.0 的那把钥匙和现在这把不是同一把（原因见第五节）。
 > 这种情况先「设置 → 导出完整备份」，卸载旧版，装完再恢复。
 
@@ -53,7 +53,7 @@
 
 **不需要 Mac，不需要 Apple 开发者账号，不需要越狱。** 用 Safari 打开就能「装」到桌面，点开后是全屏的，有图标、没有网址栏，断网也能用——用起来和真 App 没什么区别。
 
-1. 取得网页文件 —— **仓库里已经打好了，直接解压 `记账本-v1.2-pwa.zip` 就是**（里面就是整个站点，`index.html` 在最外层）。
+1. 取得网页文件 —— **仓库里已经打好了，直接解压 `记账本-v1.3-pwa.zip` 就是**（里面就是整个站点，`index.html` 在最外层）。
    也可以用源码自己构建：
    ```bash
    npm install
@@ -232,19 +232,39 @@ npx cap open ios      # 用 Xcode 打开，选真机运行
 
 ### 换 App 图标 / 启动画面
 
-改 `assets/` 里的 SVG（`icon-full.svg` 是老安卓用的整块图标，`icon-foreground.svg` 是自适应图标的前景层），然后：
+改 `assets/` 里的 SVG（`icon-full.svg` 是老安卓 / favicon 用的整块图标，`icon-foreground.svg` 是自适应图标和 iOS 用的**前景层**，只有图形、没有底色），然后：
 
 ```bash
-npm run icons      # 一次生成安卓 + iOS + PWA 三套
+npm run icons        # 一次生成安卓 + iOS + PWA 三套
+npm run icons:check  # 再出一张校验图：tools/shots/icon-check.png
 ```
+
+**改完一定要跑一次 `icons:check` 看一眼那张校验图** —— 它会按各平台实际看到的样子拼图，
+包括模拟安卓启动器对自适应图标的裁切。源码和 1024 预览图看着都对、
+装到手机上却顶边的情况，只有这张图能发现。
 
 这个脚本会用无头浏览器把 SVG 渲染成位图，然后按各平台规范铺开：
 
-- **安卓**：`android/app/src/main/res/` 下各 dpi 的 `mipmap-*` 图标，以及启动画面
+- **安卓**：`android/app/src/main/res/` 下各 dpi 的 `mipmap-*` 图标（含自适应图标的前景层与渐变背景层），以及启动画面
 - **iOS**：读 `ios/App/App/Assets.xcassets/` 里两个 `Contents.json`，按里面声明的尺寸生成 `AppIcon-512@2x.png`（1024）和三张 `splash-2732x2732*.png`
 - **PWA**：`public/icon-192.png`、`icon-512.png`、`icon-maskable-512.png`、`apple-touch-icon.png`（iPhone 主屏图标用的就是它）
 
 > 想换成自己的图，最省事的做法是直接把 `assets/icon-full.svg` 里的图形换掉——它是矢量，放大到 1024 也不会糊。
+
+**改配色或改图形时，有三个地方容易漏**（v1.3 换成 ￥ 时全踩过一遍）：
+
+1. **颜色写在四处，要一起改**：三个 SVG（`assets/icon-full.svg`、`assets/icon-foreground.svg`、
+   `public/icon.svg`）各有一份渐变定义，`tools/make-icons.mjs` 里还有 `BRAND_FROM` / `BRAND_TO`
+   —— 启动画面、maskable、iOS 图标的底色走的是后者。只改一边会出现
+   「图标换了、启动画面还是旧色」。
+2. **安卓自适应图标的底色不是颜色，是图片**：`res/mipmap-anydpi-v26/ic_launcher.xml` 里
+   引用的是 `@mipmap/ic_launcher_background`（脚本生成的渐变 PNG）。
+   安卓的 `@color` 资源不支持渐变，所以这里**不能**写回 `@color/...`。
+   漏掉这处，安卓 8.0+ 桌面上就是「新的 ￥ 浮在旧底色上」。
+3. **前景层的图形要按安全区缩小**：安卓只显示那一层 108dp 中间 66% 那块，再放大到图标大小。
+   所以脚本里前景层用 `inset: 0.67`（缩到 0.67 倍，裁完才刚好和整块图标里一样大），
+   maskable 用 `0.9`（最坏会被裁成直径 80% 的圆，要留边），iOS 与 apple-touch-icon 用 `1.0`。
+   图形的尺寸改了，这几个数要重新推。
 
 
 ### 推送到 GitHub
@@ -294,8 +314,8 @@ APK 是签过名的。**`android/jizhang.keystore` 和 `android/keystore.propert
 ├── index.html              页面骨架（顶栏、四个 Tab、底部导航）
 ├── CHANGELOG.md            更新记录：每个版本改了什么、下一轮可以做什么
 ├── 记账本-优化建议.md        v1.0 的 20 条问题清单（含文件行号与改法，优化已全部落地）
-├── 记账本-v1.2.apk         安卓安装包
-├── 记账本-v1.2-pwa.zip     iPhone 用的 PWA 包（解压后自托管，Safari 添加到主屏幕）
+├── 记账本-v1.3.apk         安卓安装包
+├── 记账本-v1.3-pwa.zip     iPhone 用的 PWA 包（解压后自托管，Safari 添加到主屏幕）
 ├── src/
 │   ├── main.js             入口：启动、主题、Tab 切换、顶部账本切换
 │   ├── db.js               IndexedDB 封装（增删改查、批量、清空）
@@ -325,6 +345,7 @@ APK 是签过名的。**`android/jizhang.keystore` 和 `android/keystore.propert
 │   ├── build-apk.mjs       一键打包安卓
 │   ├── make-icons.mjs      SVG → 安卓 / iOS / PWA 三套图标和启动画面
 │   ├── verify.mjs          68 项自动化走查
+│   ├── verify-icons.mjs    图标观感校验：模拟各平台裁切，出一张对比图
 │   └── push-to-github.mjs  走 GitHub API 推送（绕开被墙的 github.com）
 ├── docs/screenshots/       README 用的截图
 ├── android/                安卓工程（Capacitor 生成 + 少量手工配置）
@@ -357,6 +378,17 @@ APK 是签过名的。**`android/jizhang.keystore` 和 `android/keystore.propert
 
 一直是纯本地 App，**没有引入任何新框架、新依赖、新网络请求**。
 逐版本的完整记录（含打包工具链踩过的坑）在 [`CHANGELOG.md`](CHANGELOG.md)，这里只讲用得上的部分。
+
+### v1.3 —— 图标换成 ￥
+
+- **图形**：原来是白卡片 + 三条横线 + 一个圆点，现在是一枚白色的 **￥**。
+  它是用矢量描边画出来的，不是打一个「¥」字 —— `public/icon.svg` 会被当 favicon 直接用，
+  用文字的话，设备上缺字体会渲染成一个方框。
+- **配色**：金 → 橙渐变（`#C79A2E` → `#D9662A`）。
+- **界面没跟着变**：App 内部的蓝色（`--primary`）保持原样，只有桌面图标和启动画面换了色。
+  想让整个 App 也变成金橙，改 `styles.css` 里的 `--primary` 一处，
+  另外要同步 `manifest.webmanifest`、`index.html` 和 `src/main.js` 里的 `theme_color`。
+- **要再换图形 / 换配色**：见上面「换 App 图标 / 启动画面」那节，注意里面的三个坑。
 
 ### v1.2 —— 分类预算
 

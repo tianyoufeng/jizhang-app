@@ -4,7 +4,7 @@
  * 版本号。发新版时这五处要一起改，别只改一处：
  * 这里、package.json、android/app/build.gradle、ios 的 project.pbxproj、public/sw.js 的 CACHE。
  */
-export const APP_VERSION = '1.2';
+export const APP_VERSION = '1.3';
 
 /** 金额一律以「分」为单位存整数，避免小数计算误差 */
 

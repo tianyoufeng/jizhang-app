@@ -1,6 +1,6 @@
 {
   "name": "jizhang-app",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,6 +9,7 @@
     "preview": "vite preview --host",
     "apk": "npm run build && npx cap sync android && node tools/build-apk.mjs",
     "icons": "node tools/make-icons.mjs",
+    "icons:check": "node tools/verify-icons.mjs",
     "verify": "node tools/verify.mjs",
     "push": "node tools/push-to-github.mjs"
   },

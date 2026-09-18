@@ -1,8 +1,11 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
-  <!-- 自适应图标的前景层：内容要留在中间安全区内，四周留空由系统裁切 -->
-  <rect x="206" y="300" width="612" height="424" rx="92" fill="#ffffff"/>
-  <rect x="206" y="398" width="612" height="62" fill="#cfe0f7"/>
-  <rect x="298" y="520" width="248" height="46" rx="23" fill="#3b7dd8"/>
-  <rect x="298" y="608" width="166" height="46" rx="23" fill="#9fbbe6"/>
-  <circle cx="722" cy="622" r="52" fill="#3b7dd8"/>
+  <!-- 自适应图标的前景层：只有 ￥，没有底色（底色由背景层给）。
+       内容要留在中间安全区内，四周留空由系统裁切。 -->
+  <g fill="none" stroke="#ffffff" stroke-width="80" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M280 232 L512 462"/>
+    <path d="M744 232 L512 462"/>
+    <path d="M512 462 L512 792"/>
+    <path d="M336 568 L688 568"/>
+    <path d="M336 692 L688 692"/>
+  </g>
 </svg>

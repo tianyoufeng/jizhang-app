@@ -14,7 +14,18 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 
 const EDGE = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
 const RES = 'android/app/src/main/res';
-const BRAND = '#3b7dd8';
+
+/**
+ * 品牌色。图标本体是「金 → 橙」的斜向渐变，所以这里存两端色值：
+ * 图标 SVG 里写的是同样的渐变（见 assets/icon-*.svg）。
+ * 需要单一色值的场合（安卓兜底 color 资源、manifest 的 theme_color）用 BRAND_FROM。
+ * 改配色时这两处要一起改，否则图标和启动图会不同色。
+ */
+const BRAND_FROM = '#C79A2E';
+const BRAND_TO = '#D9662A';
+// CSS 里没有「渐变值」这种类型，只能用 linear-gradient()；方向 135deg = 左上 → 右下，
+// 和 SVG 里 x1=0,y1=0→x2=1,y2=1 是同一个方向。
+const BRAND_CSS = `linear-gradient(135deg, ${BRAND_FROM}, ${BRAND_TO})`;
 
 // 各自去掉写死的宽高，交给外层按目标尺寸指定
 const svgFull = readFileSync('assets/icon-full.svg', 'utf8').replace(/width="1024" height="1024"/, '');
@@ -35,7 +46,7 @@ async function shoot({ width, height, html, transparent = true }) {
 /**
  * 方形图标。
  * bg 为 null 时背景透明（自适应图标的前景层用）；
- * 给了底色、并把 inset 调大，就是 iOS / maskable 要的「铺满整块」版本。
+ * 给了底色就是把整块铺满（maskable / iOS 的图标要用渐变铺满整块）。
  */
 function squareHtml({ size, svg, inset = 1, bg = null }) {
   const box = Math.round(size * inset);
@@ -44,6 +55,12 @@ function squareHtml({ size, svg, inset = 1, bg = null }) {
       background:${bg || 'transparent'};display:flex;align-items:center;justify-content:center">
      <div style="width:${box}px;height:${box}px">${inner}</div>
    </body></html>`;
+}
+
+/** 一整块纯渐变的方块，给自适应图标的背景层用 */
+function gradientHtml(size) {
+  return `<html><body style="margin:0;padding:0;width:${size}px;height:${size}px;
+      background:${BRAND_CSS}"></body></html>`;
 }
 
 /* ================= 1. 安卓 ================= */
@@ -57,11 +74,17 @@ const DENSITIES = [
   ['xxxhdpi', 4]
 ];
 
-// 老图标基准 48dp；自适应图标的前景层基准 108dp
+// 老图标基准 48dp；自适应图标的前景层与背景层基准都是 108dp
 const JOBS = [
   { svg: svgFull, file: 'ic_launcher.png', base: 48, transparent: false },
   { svg: svgFull, file: 'ic_launcher_round.png', base: 48, transparent: false },
-  { svg: svgFore, file: 'ic_launcher_foreground.png', base: 108, transparent: true }
+  // 前景层要把 ￥ 缩到 0.67：安卓只显示这层中间 66% 那块并放大到图标大小，
+  // 若按整块图标那样铺（字形占本层 62.5%），裁完等于放大到 94%，顶到边。
+  // 0.67 是反推出来的：62.5% ÷ 66.7% ≈ 0.94 太大，要让裁完仍是 62.5%，就得乘 0.67。
+  { svg: svgFore, file: 'ic_launcher_foreground.png', base: 108, transparent: true, inset: 0.67 },
+  // 自适应图标的背景层：整块品牌渐变。系统负责把两层裁成圆/方/水滴，
+  // 所以这里要铺满、不留边 —— 之前这里是一个纯色 @color，换渐变必须换成图片。
+  { file: 'ic_launcher_background.png', base: 108, transparent: false, bgOnly: true }
 ];
 
 for (const job of JOBS) {
@@ -71,7 +94,7 @@ for (const job of JOBS) {
       width: size,
       height: size,
       transparent: job.transparent,
-      html: squareHtml({ size, svg: job.svg, inset: 1, bg: job.transparent ? null : null })
+      html: job.bgOnly ? gradientHtml(size) : squareHtml({ size, svg: job.svg, inset: job.inset ?? 1 })
     });
 
     const dir = `${RES}/mipmap-${density}`;
@@ -90,14 +113,15 @@ for (const size of [192, 512]) {
   console.log(`public/icon-${size}.png  ${size}×${size}`);
 }
 
-// maskable：必须铺满整块，四周留安全边距，系统怎么裁都不会切到内容
+// maskable：必须铺满整块。0.9 是留出安全边距 —— maskable 最坏会被裁成
+// 直径 80% 的圆，不留边的话 ￥ 的两撇会贴到圆边上。
 {
   const size = 512;
   const buf = await shoot({
     width: size,
     height: size,
     transparent: false,
-    html: squareHtml({ size, svg: svgFore, bg: BRAND })
+    html: squareHtml({ size, svg: svgFore, inset: 0.9, bg: BRAND_CSS })
   });
   writeFileSync('public/icon-maskable-512.png', buf);
   console.log(`public/icon-maskable-512.png  ${size}×${size}`);
@@ -110,7 +134,7 @@ for (const size of [192, 512]) {
     width: size,
     height: size,
     transparent: false,
-    html: squareHtml({ size, svg: svgFore, inset: 1.15, bg: BRAND })
+    html: squareHtml({ size, svg: svgFore, inset: 1, bg: BRAND_CSS })
   });
   writeFileSync('public/apple-touch-icon.png', buf);
   console.log(`public/apple-touch-icon.png  ${size}×${size}`);
@@ -118,7 +142,7 @@ for (const size of [192, 512]) {
 
 /* ================= 3. 安卓启动画面 ================= */
 
-// 蓝底 + 居中的白色卡片，尺寸跟原来模板里的一致
+// 品牌渐变底 + 居中白色的 ￥，尺寸跟原来模板里的一致
 const SPLASHES = [
   ['drawable', 480, 320],
   ['drawable-port-mdpi', 320, 480],
@@ -135,14 +159,16 @@ const SPLASHES = [
 
 function splashHtml({ width, height, logo }) {
   const inner = svgFore.replace('<svg', `<svg width="${logo}" height="${logo}"`);
-  return `<html><body style="margin:0;padding:0;width:${width}px;height:${height}px;background:${BRAND};
+  return `<html><body style="margin:0;padding:0;width:${width}px;height:${height}px;background:${BRAND_CSS};
       display:flex;align-items:center;justify-content:center">
      <div style="width:${logo}px;height:${logo}px">${inner}</div>
    </body></html>`;
 }
 
 for (const [dir, w, h] of SPLASHES) {
-  const logo = Math.round(Math.min(w, h) * 0.34);
+  // 0.48：￥ 的墨迹只占自己那个方框的 62%，乘下来是屏幕短边的 30% 左右，
+  // 比原来那张白卡片明显一点，又不至于撑满。
+  const logo = Math.round(Math.min(w, h) * 0.48);
   const buf = await shoot({ width: w, height: h, transparent: false, html: splashHtml({ width: w, height: h, logo }) });
   mkdirSync(`${RES}/${dir}`, { recursive: true });
   writeFileSync(`${RES}/${dir}/splash.png`, buf);
@@ -207,11 +233,11 @@ const IOS_ASSETS = 'ios/App/App/Assets.xcassets';
 if (existsSync(IOS_ASSETS)) {
   const didIcon = await fillImageSet(
     `${IOS_ASSETS}/AppIcon.appiconset`,
-    (px) => squareHtml({ size: px, svg: svgFore, inset: 1.15, bg: BRAND })
+    (px) => squareHtml({ size: px, svg: svgFore, inset: 1, bg: BRAND_CSS })
   );
   const didSplash = await fillImageSet(
     `${IOS_ASSETS}/Splash.imageset`,
-    (px) => splashHtml({ width: px, height: px, logo: Math.round(px * 0.18) })
+    (px) => splashHtml({ width: px, height: px, logo: Math.round(px * 0.2) })
   );
   console.log(`\niOS：图标 ${didIcon ? '已生成' : '未找到'}，启动图 ${didSplash ? '已生成' : '未找到'}`);
 } else {

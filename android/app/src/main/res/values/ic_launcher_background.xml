@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="ic_launcher_background">#3B7DD8</color>
+    <!-- 自适应图标的背景已经改用 @mipmap/ic_launcher_background（金→橙渐变图片，
+         由 tools/make-icons.mjs 生成），这里不再被引用，只留作兜底色。
+         改品牌色时要和 make-icons.mjs 里的 BRAND_FROM 一起改。 -->
+    <color name="ic_launcher_background">#C79A2E</color>
 </resources>
