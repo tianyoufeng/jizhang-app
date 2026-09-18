@@ -8,13 +8,20 @@
  * 按内容算的，只要内容、作者、时间和父子关系一致，远程算出来的哈希就和本地
  * 完全相同。这样本地和远程不会分叉，以后网络通了直接 `git push` 也是同步的。
  *
+ * 浅克隆（git clone --depth）要特别小心：
+ *   本地最早那个提交（`git rev-list HEAD` 的最后一个）可能带着一个父提交，
+ *   但父对象本地没有拉下来。这个父提交在远程是真实存在的，必须原样接回去；
+ *   一旦当成「空父提交」丢掉，复刻出来的就是一个没有父提交的根提交，
+ *   原来那一段历史会和分支脱开，哈希也永远对不上。见下面 resolveParents。
+ *
  * 用法：
  *   node tools/push-to-github.mjs                 推到 origin 指向的仓库
  *   node tools/push-to-github.mjs owner/repo      推到指定仓库
  *
  * 前提：gh 已登录（脚本直接问 gh 要 token）。
  */
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 
 const BRANCH = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).trim();
 
@@ -27,6 +34,39 @@ function guessRepo() {
 
 const REPO = process.argv[2] || guessRepo();
 const token = execFileSync('gh', ['auth', 'token'], { encoding: 'utf8' }).trim();
+
+/* ---------------- 0. 证书自愈 ---------------- */
+/**
+ * 有些机器（公司电脑、装了抓包/加速代理的机器）会替换 TLS 证书。这种代理的根证书
+ * 装在 Windows 的证书库里，而 Node 默认只认自己内置的那份，于是 api.github.com 会报
+ * UNABLE_TO_VERIFY_LEAF_SIGNATURE —— 明明 `gh` 能用，脚本却连不上。
+ *
+ * Node 22.15+ 的 --use-system-ca 可以改用系统证书库。这里先探一下，需要就带着这个
+ * 参数把自己重跑一遍，省得每次都要记住加参数。
+ */
+async function tlsProbe() {
+  try {
+    await fetch('https://api.github.com/rate_limit', { method: 'GET' });
+    return { ok: true };
+  } catch (e) {
+    const code = String(e?.cause?.code || e?.code || e?.message || '');
+    return { ok: false, code, tlsLike: /CERT|UNABLE_TO_VERIFY|SELF_SIGNED|SSL|TLS/i.test(code) };
+  }
+}
+
+const [nodeMajor, nodeMinor] = process.versions.node.split('.').map(Number);
+const supportsSystemCa = nodeMajor > 22 || (nodeMajor === 22 && nodeMinor >= 15);
+
+if (supportsSystemCa && !process.execArgv.includes('--use-system-ca')) {
+  const probe = await tlsProbe();
+  if (!probe.ok && probe.tlsLike) {
+    console.log(`检测到本机 TLS 证书链问题（${probe.code}），改用系统证书库重试…\n`);
+    const child = spawnSync(process.execPath, ['--use-system-ca', ...process.argv.slice(1)], {
+      stdio: 'inherit'
+    });
+    process.exit(child.status ?? 1);
+  }
+}
 
 async function api(path, body, method = 'POST') {
   const res = await fetch(`https://api.github.com${path}`, {
@@ -59,6 +99,22 @@ function rawMessage(sha) {
   const i = raw.indexOf('\n\n');
   if (i < 0) throw new Error(`提交 ${sha} 格式不对，找不到消息部分`);
   return raw.slice(i + 2);
+}
+
+/**
+ * 取提交的父提交列表。
+ *
+ * 同样不能图省事用 `git log --format=%P`：浅克隆的边界提交在 git 眼里「没有父提交」
+ * （它的父对象没被拉下来），`%P` 会返回空 —— 但它对象里其实写着 `parent ...`。
+ * 照 `%P` 的结果去复刻，就会凭空造出一个没有父提交的根提交，历史直接断掉。
+ * 所以必须从原始对象里逐行读。
+ */
+function rawParents(sha) {
+  return gitBuf('cat-file', 'commit', sha)
+    .toString('utf8')
+    .split('\n')
+    .filter((line) => line.startsWith('parent '))
+    .map((line) => line.slice('parent '.length).trim());
 }
 
 /**
@@ -103,6 +159,12 @@ console.log(`仓库：${REPO}`);
 console.log(`分支：${BRANCH}`);
 console.log(`提交：${commits.length} 个（从旧到新）`);
 
+// 浅克隆时，本地只有最近若干个提交。窗口之外的父提交本地没有对象，
+// 但远程有 —— resolveParents 会把它们原样接回去，这里只是提醒一句。
+if (existsSync('.git/shallow')) {
+  console.log('（浅克隆：只复刻本地已有的这几个提交，更早的历史原样接在远程上）');
+}
+
 await ensureRepoHasCommit();
 
 /* ---------------- 2. 上传所有文件内容（同内容只传一次） ---------------- */
@@ -133,7 +195,35 @@ for (let i = 0; i < shaList.length; i += lanes) {
 /* ---------------- 3. 逐个复刻提交 ---------------- */
 console.log('\n复刻提交…');
 const remoteOf = new Map(); // 本地 commit sha -> 远程 commit sha
-const mismatches = [];
+const shaDrift = []; // 只有提交哈希对不上（内容一致但历史分叉，要提醒）
+
+/**
+ * 把本地的父提交列表翻译成远程的父提交列表。
+ *
+ * 大多数父提交就在本次推送的窗口里，直接从 remoteOf 里取。
+ * 但浅克隆时，窗口里最早那个提交的父提交属于「本地没有、远程有」的情况，
+ * 必须原样沿用它的哈希 —— 丢掉它就会凭空多出一个根提交，历史直接断掉。
+ */
+async function resolveParents(parents) {
+  const out = [];
+  for (const p of parents) {
+    const mapped = remoteOf.get(p);
+    if (mapped) {
+      out.push(mapped);
+      continue;
+    }
+    try {
+      await api(`/repos/${REPO}/git/commits/${p}`, null, 'GET');
+    } catch {
+      throw new Error(
+        `父提交 ${p.slice(0, 7)} 本地没有（浅克隆），远程也查不到，推上去会断掉历史。\n` +
+          `先补全本地历史再推：git fetch --unshallow`
+      );
+    }
+    out.push(p);
+  }
+  return out;
+}
 
 for (const c of commits) {
   const localTree = git('log', '-1', '--format=%T', c);
@@ -145,15 +235,21 @@ for (const c of commits) {
   }));
 
   const tree = await api(`/repos/${REPO}/git/trees`, { tree: entries });
-  if (tree.sha !== localTree) mismatches.push(`tree 哈希不一致：本地 ${localTree.slice(0, 7)}，远程 ${tree.sha.slice(0, 7)}`);
+  if (tree.sha !== localTree) {
+    // 内容都对不上就别动分支了，免得把远程改成半吊子状态
+    throw new Error(
+      `提交 ${c.slice(0, 7)} 的 tree 哈希不一致：本地 ${localTree.slice(0, 7)}，远程 ${tree.sha.slice(0, 7)}\n` +
+        `文件内容没有完整复刻，已中止 —— 分支指针没有被改动。`
+    );
+  }
 
   // 作者、提交者、时间都照抄本地，哈希才对得上
   const [an, ae, ad, cn, ce, cd] = git(
     'log', '-1', '--format=%an%x00%ae%x00%aI%x00%cn%x00%ce%x00%cI', c
   ).split('\0');
 
-  const parents = git('log', '-1', '--format=%P', c).split(' ').filter(Boolean);
-  const remoteParents = parents.map((p) => remoteOf.get(p));
+  const parents = rawParents(c);
+  const remoteParents = await resolveParents(parents);
 
   const created = await api(`/repos/${REPO}/git/commits`, {
     message: rawMessage(c),
@@ -164,7 +260,7 @@ for (const c of commits) {
   });
 
   remoteOf.set(c, created.sha);
-  if (created.sha !== c) mismatches.push(`提交哈希不一致：本地 ${c.slice(0, 7)}，远程 ${created.sha.slice(0, 7)}`);
+  if (created.sha !== c) shaDrift.push(`提交哈希不一致：本地 ${c.slice(0, 7)}，远程 ${created.sha.slice(0, 7)}`);
   console.log(`  ${c.slice(0, 7)} → ${created.sha.slice(0, 7)}  ${git('log', '-1', '--format=%s', c)}`);
 }
 
@@ -180,14 +276,16 @@ try {
 /* 顺手把本地的 origin 记录也对齐，这样 git status 不会显示「分叉」 */
 try {
   execFileSync('git', ['update-ref', `refs/remotes/origin/${BRANCH}`, head]);
-} catch {
-  /* 失败也不影响推送结果 */
+  console.log(`本地 origin/${BRANCH} 已指向 ${head.slice(0, 7)}`);
+} catch (e) {
+  console.log(`（本地 origin/${BRANCH} 没对齐成功：${e.message.split('\n')[0]}）`);
 }
 
 console.log(`\n推送完成：https://github.com/${REPO}/tree/${BRANCH}`);
-if (mismatches.length) {
-  console.log('\n注意：有几处哈希对不上，本地和远程可能分叉：');
-  mismatches.forEach((m) => console.log('  - ' + m));
+if (shaDrift.length) {
+  console.log('\n注意：文件内容一致，但有提交的哈希对不上，本地和远程仍然是分叉的：');
+  shaDrift.forEach((m) => console.log('  - ' + m));
+  console.log('  内容没问题，只是历史线的形状不一样，以后网络通了直接 git push 会冲突。');
   process.exitCode = 1;
 } else {
   console.log('远程和本地的提交哈希完全一致，两边是同步的。');
