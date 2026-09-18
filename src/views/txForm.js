@@ -1,5 +1,5 @@
-import { categoriesOf, addTransaction, updateTransaction, currentLedger } from '../store.js';
-import { money, yuanToFen, today, dayAgo, escapeHtml } from '../utils.js';
+import { categoriesOf, addTransaction, updateTransaction, currentLedger, categoryBudgetMap } from '../store.js';
+import { money, yuanToFen, today, dayAgo, monthOf, escapeHtml } from '../utils.js';
 import { toast } from '../ui.js';
 
 /** 输入框里只保留「数字 + 一个小数点 + 最多两位小数」 */
@@ -13,6 +13,17 @@ export function sanitizeAmount(raw) {
     s = `${intPart}.${decPart.slice(0, 2)}`;
   }
   return s;
+}
+
+/**
+ * 分类格上预算圆点的说明文字，同时当 title 和无障碍替代文本用。
+ * 圆点本身只是个色块，屏幕阅读器读不出任何东西，得靠这句。
+ */
+function budgetLabel(cat, b) {
+  if (b.level === 'over') {
+    return `${cat.name}：本月已花 ${money(b.spentFen)} 元，超预算 ${money(-b.leftFen)} 元（预算 ${money(b.budgetFen)} 元）`;
+  }
+  return `${cat.name}：本月已花 ${money(b.spentFen)} 元，预算 ${money(b.budgetFen)} 元，还剩 ${money(b.leftFen)} 元（已用 ${(b.ratio * 100).toFixed(0)}%）`;
 }
 
 /**
@@ -57,6 +68,7 @@ export function mountTxForm(root, opts = {}) {
     <div class="card">
       <p class="card-title">分类</p>
       <div class="cat-grid" data-role="cats"></div>
+      <p class="cat-legend" data-role="cat-legend" hidden></p>
     </div>
 
     <div class="card">
@@ -83,6 +95,7 @@ export function mountTxForm(root, opts = {}) {
   const amountEl = root.querySelector('#amountInput');
   const hintEl = root.querySelector('[data-role="hint"]');
   const catsEl = root.querySelector('[data-role="cats"]');
+  const legendEl = root.querySelector('[data-role="cat-legend"]');
   const dateEl = root.querySelector('[data-role="date"]');
   const noteEl = root.querySelector('[data-role="note"]');
   const saveEl = root.querySelector('[data-role="save"]');
@@ -102,19 +115,34 @@ export function mountTxForm(root, opts = {}) {
     const list = categoriesOf(draft.kind);
     if (!list.length) {
       catsEl.innerHTML = '<div class="muted">这个类型下还没有分类，去「设置 → 分类管理」加一个</div>';
+      legendEl.hidden = true;
       return;
     }
     if (!list.some((c) => c.id === draft.categoryId)) {
       draft.categoryId = list[0].id;
     }
+
+    // 圆点跟着「所选日期」所在的月份走：补记上个月的账时，
+    // 该看到的是上个月花了多少，而不是今天的当月进度。
+    const budgets = draft.kind === 'expense' ? categoryBudgetMap(monthOf(draft.date)) : new Map();
+
     catsEl.innerHTML = list
-      .map(
-        (c) => `<button type="button" class="cat-item ${c.id === draft.categoryId ? 'active' : ''}" data-cat="${c.id}">
+      .map((c) => {
+        const b = budgets.get(c.id);
+        const label = b ? budgetLabel(c, b) : '';
+        return `<button type="button" class="cat-item ${c.id === draft.categoryId ? 'active' : ''}" data-cat="${c.id}"
+            ${b ? `title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}"` : ''}>
+          ${b ? `<span class="cat-dot ${b.level}"></span>` : ''}
           <span class="cat-emoji">${escapeHtml(c.emoji)}</span>
           <span class="cat-name">${escapeHtml(c.name)}</span>
-        </button>`
-      )
+        </button>`;
+      })
       .join('');
+
+    // 一个预算都没设时，这行说明只会是噪音。
+    // 文案压到一行以内 —— 记账页本来就不短，别再往下多推一行
+    legendEl.hidden = budgets.size === 0;
+    legendEl.textContent = '圆点＝月预算，黄是花到八成，红是超支';
   }
 
   /** 日期快捷按钮的高亮：只有正好等于今天/昨天/前天时才亮 */
@@ -186,6 +214,7 @@ export function mountTxForm(root, opts = {}) {
   dateEl.addEventListener('change', () => {
     draft.date = dateEl.value || today();
     renderQuick();
+    renderCats();   // 换了月份，分类格上的预算进度也得跟着换
   });
 
   quickEl.addEventListener('click', (e) => {
@@ -194,6 +223,7 @@ export function mountTxForm(root, opts = {}) {
     draft.date = dayAgo(Number(btn.dataset.off));
     dateEl.value = draft.date;
     renderQuick();
+    renderCats();
   });
 
   noteEl.addEventListener('input', () => {

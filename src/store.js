@@ -161,7 +161,7 @@ export function categoryById(id) {
   return state.categories.find((c) => c.id === id);
 }
 
-export async function addCategory(kind, name, emoji) {
+export async function addCategory(kind, name, emoji, budgetFen = 0) {
   const sameKind = state.categories.filter((c) => c.kind === kind);
   const cat = {
     id: newId(),
@@ -170,6 +170,7 @@ export async function addCategory(kind, name, emoji) {
     emoji: emoji || '📦',
     order: sameKind.reduce((max, c) => Math.max(max, c.order ?? 0), -1) + 1
   };
+  if (kind === 'expense' && budgetFen > 0) cat.budgetFen = budgetFen;
   state.categories.push(cat);
   await db.put('categories', cat);
   return cat;
@@ -203,6 +204,10 @@ export async function updateCategory(id, patch) {
   const cat = categoryById(id);
   if (!cat) return;
   Object.assign(cat, patch);
+  // 月预算只对支出有意义，而且 0 就是「不设」。
+  // 归一成「属性不存在」而不是留个 0：免得界面上再也看不到、
+  // 也改不掉，却跟着备份一路带下去。
+  if (cat.kind === 'income' || !(cat.budgetFen > 0)) delete cat.budgetFen;
   await db.put('categories', cat);
 }
 
@@ -289,28 +294,33 @@ export function monthSummary(month, ledgerId = state.meta.currentLedgerId) {
   return { incomeFen, expenseFen, balanceFen: incomeFen - expenseFen, count: list.length };
 }
 
-/** 按分类汇总，金额从大到小 */
-export function categoryBreakdown(month, kind, ledgerId = state.meta.currentLedgerId) {
-  const list = transactionsOfLedger(ledgerId)
-    .filter((t) => t.kind === kind && monthOf(t.date) === month);
-
+/** 某月某类型，按分类汇总成 Map<categoryId, { amountFen, count }> */
+export function categoryTotals(month, kind, ledgerId = state.meta.currentLedgerId) {
   const map = new Map();
-  for (const t of list) {
-    const key = t.categoryId;
-    const entry = map.get(key) || { categoryId: key, amountFen: 0, count: 0 };
+  for (const t of transactionsOfLedger(ledgerId)) {
+    if (t.kind !== kind || monthOf(t.date) !== month) continue;
+    const entry = map.get(t.categoryId) || { amountFen: 0, count: 0 };
     entry.amountFen += t.amountFen;
     entry.count += 1;
-    map.set(key, entry);
+    map.set(t.categoryId, entry);
   }
+  return map;
+}
 
+/** 按分类汇总，金额从大到小 */
+export function categoryBreakdown(month, kind, ledgerId = state.meta.currentLedgerId) {
+  const map = categoryTotals(month, kind, ledgerId);
   const total = [...map.values()].reduce((a, e) => a + e.amountFen, 0);
+
   return {
     total,
-    items: [...map.values()]
-      .map((e) => {
-        const cat = categoryById(e.categoryId);
+    items: [...map.entries()]
+      .map(([categoryId, e]) => {
+        const cat = categoryById(categoryId);
         return {
-          ...e,
+          categoryId,
+          amountFen: e.amountFen,
+          count: e.count,
           name: cat?.name ?? '未分类',
           emoji: cat?.emoji ?? '❓',
           pct: total ? e.amountFen / total : 0
@@ -318,6 +328,38 @@ export function categoryBreakdown(month, kind, ledgerId = state.meta.currentLedg
       })
       .sort((a, b) => b.amountFen - a.amountFen)
   };
+}
+
+/* ---------------- 分类预算 ---------------- */
+
+/** 花到 80% 就该给个眼色，和「本月预算」那张卡一个口径 */
+const BUDGET_WARN_RATIO = 0.8;
+
+/**
+ * 一次算好所有「设了预算的支出分类」在本月的状态，给记账页的分类格用。
+ * 逐个分类各查一次要扫 N 遍全部记录，所以先按分类汇总一轮再查表。
+ * 返回 Map<categoryId, { budgetFen, spentFen, leftFen, ratio, level }>，
+ * level 取 'ok' | 'warn' | 'over'。没设预算的分类不在表里。
+ */
+export function categoryBudgetMap(month = currentMonth(), ledgerId = state.meta.currentLedgerId) {
+  const spent = categoryTotals(month, 'expense', ledgerId);
+  const out = new Map();
+
+  for (const cat of state.categories) {
+    if (cat.kind !== 'expense') continue;
+    const budgetFen = cat.budgetFen || 0;
+    if (budgetFen <= 0) continue;
+    const spentFen = spent.get(cat.id)?.amountFen ?? 0;
+    const ratio = spentFen / budgetFen;
+    out.set(cat.id, {
+      budgetFen,
+      spentFen,
+      leftFen: budgetFen - spentFen,
+      ratio,
+      level: ratio >= 1 ? 'over' : ratio >= BUDGET_WARN_RATIO ? 'warn' : 'ok'
+    });
+  }
+  return out;
 }
 
 /** 最近 n 个月的收支，从早到晚，用于趋势图 */

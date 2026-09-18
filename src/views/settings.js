@@ -1,10 +1,10 @@
 import {
   state, initStore, currentLedger, switchLedger, addLedger, updateLedger, deleteLedger,
   categoriesOf, addCategory, updateCategory, moveCategory, deleteCategory, categoryUsage,
-  exportPayload, importPayload, toCsv, monthSummary, setMeta
+  categoryBudgetMap, exportPayload, importPayload, toCsv, monthSummary, setMeta
 } from '../store.js';
 import { db } from '../db.js';
-import { money, yuanToFen, fenToYuan, currentMonth, daysBetween, toDateStr, escapeHtml } from '../utils.js';
+import { money, yuanToFen, fenToYuan, currentMonth, daysBetween, toDateStr, escapeHtml, APP_VERSION } from '../utils.js';
 import { openSheet, confirmDialog, alertDialog, toast } from '../ui.js';
 import { saveTextFile, readTextFile, stamp } from '../fileio.js';
 
@@ -101,7 +101,7 @@ export function renderSettings(root) {
       <div class="set-list">
         <div class="set-row" style="cursor:default">
           <span class="sr-ico">ℹ️</span>
-          <span class="sr-main">记账本<span class="sr-sub">本地版 v1.0 · 记录 ${state.transactions.length} 笔</span></span>
+          <span class="sr-main">记账本<span class="sr-sub">本地版 v${escapeHtml(APP_VERSION)} · 记录 ${state.transactions.length} 笔</span></span>
         </div>
       </div>
     </div>
@@ -296,6 +296,14 @@ function openBudgetEditor(root) {
 
 /* ---------------- 分类管理 ---------------- */
 
+/** 分类管理列表里那行小字：用了多少笔，设了预算的再带上本月进度 */
+function catSub(used, b) {
+  const base = `${used} 笔记录在用`;
+  if (!b) return base;
+  const pct = (b.ratio * 100).toFixed(0);
+  return `${base} · 本月 ${money(b.spentFen)} / ${money(b.budgetFen)} 元（${pct}%）`;
+}
+
 function openCategoryManager(root, kind = 'expense') {
   const handle = openSheet({
     title: '分类管理',
@@ -306,11 +314,14 @@ function openCategoryManager(root, kind = 'expense') {
       </div>
       <div data-role="list"></div>
       <button type="button" class="btn btn-outline btn-block" data-role="add" style="margin-top:14px">➕ 新增分类</button>
-      <p class="muted" style="margin-top:12px">↑↓ 调整分类在记账页的排列顺序。删掉分类不会删掉记录，那些记录会显示成「未分类」。</p>`
+      <p class="muted" style="margin-top:12px">↑↓ 调整分类在记账页的排列顺序。点分类可以改名、换图标，也可以给支出分类设月预算。删掉分类不会删掉记录，那些记录会显示成「未分类」。</p>`
   });
 
   function paint() {
     const items = categoriesOf(kind);
+    // 只有支出分类有预算这回事，收入分类不必白算一遍
+    const budgets = kind === 'expense' ? categoryBudgetMap(currentMonth()) : new Map();
+
     handle.body.querySelectorAll('[data-role="seg"] button').forEach((b) => {
       b.classList.toggle('active', b.dataset.kind === kind);
     });
@@ -319,12 +330,13 @@ function openCategoryManager(root, kind = 'expense') {
     box.innerHTML = `<div class="set-list">${items
       .map((c, i) => {
         const used = categoryUsage(c.id);
+        const b = budgets.get(c.id);
         return `<div class="cat-row">
           <button type="button" class="cat-row-main" data-cat="${c.id}">
             <span class="cm-emoji">${escapeHtml(c.emoji)}</span>
             <span class="cm-body">
               <div class="cm-name">${escapeHtml(c.name)}</div>
-              <div class="cm-sub">${used} 笔记录在用</div>
+              <div class="cm-sub ${b ? b.level : ''}">${catSub(used, b)}</div>
             </span>
           </button>
           <span class="cm-tools">
@@ -381,7 +393,14 @@ function openCategoryEditor(cat, onDone, root, kind = 'expense') {
             <option value="expense" ${selectedKind === 'expense' ? 'selected' : ''}>支出</option>
             <option value="income" ${selectedKind === 'income' ? 'selected' : ''}>收入</option>
           </select></div>
+        <div class="field" data-role="budget-field" ${selectedKind === 'expense' ? '' : 'hidden'}>
+          <span class="field-label">月预算</span>
+          <input type="text" inputmode="decimal" data-role="budget" placeholder="选填，比如 1000"
+                 value="${cat?.budgetFen ? escapeHtml(fenToYuan(cat.budgetFen)) : ''}" /></div>
       </div>
+      <p class="muted" data-role="budget-hint" style="margin-top:10px" ${selectedKind === 'expense' ? '' : 'hidden'}>
+        月预算是这个分类每月的支出上限。记账页的分类格上会显示进度，花到八成变黄、超支变红。留空或填 0 就是不设。
+      </p>
       <p class="card-title" style="margin:16px 0 8px">选个图标</p>
       <div class="emoji-grid" data-role="emojis">
         ${EMOJI_CHOICES.map((e) => `<button type="button" data-e="${e}" class="${e === emoji ? 'active' : ''}">${e}</button>`).join('')}
@@ -396,19 +415,37 @@ function openCategoryEditor(cat, onDone, root, kind = 'expense') {
           const name = h.body.querySelector('[data-role="name"]').value.trim();
           if (!name) return toast('给分类起个名字');
           const k = h.body.querySelector('[data-role="kind"]').value;
+          const budgetRaw = h.body.querySelector('[data-role="budget"]').value.trim();
+
+          // 收入分类没有预算这回事，那时输入框是藏着的，直接按不设处理
+          let budgetFen = 0;
+          if (k === 'expense' && budgetRaw) {
+            const fen = yuanToFen(budgetRaw);
+            if (fen === null || fen < 0) return toast('月预算填个数字就行，比如 1000');
+            budgetFen = fen;
+          }
 
           if (isNew) {
-            await addCategory(k, name, emoji);
-            toast('分类已添加');
+            await addCategory(k, name, emoji, budgetFen);
+            toast(budgetFen ? `分类已添加，月预算 ${money(budgetFen)} 元` : '分类已添加');
           } else {
-            await updateCategory(cat.id, { name, emoji, kind: k });
-            toast('已保存');
+            await updateCategory(cat.id, { name, emoji, kind: k, budgetFen });
+            toast(budgetFen ? `已保存，月预算 ${money(budgetFen)} 元` : '已保存');
           }
           h.close();
           onDone?.();
         }
       }
     ]
+  });
+
+  // 改成收入分类就把预算那一格收起来。用的是 hidden 属性，
+  // 而 .field 是 display:flex —— 所以 styles.css 里必须有 [hidden] 的兜底规则，
+  // 否则这一行根本藏不住（踩过一次）。
+  handle.body.querySelector('[data-role="kind"]').addEventListener('change', (e) => {
+    const isExpense = e.target.value === 'expense';
+    handle.body.querySelector('[data-role="budget-field"]').hidden = !isExpense;
+    handle.body.querySelector('[data-role="budget-hint"]').hidden = !isExpense;
   });
 
   handle.body.querySelector('[data-role="emojis"]').addEventListener('click', (e) => {

@@ -106,6 +106,41 @@ async function tapTxOf(categoryName) {
 
 const savedFiles = () => page.evaluate(() => window.__saved);
 
+/** 分类格上那个预算圆点的 class，用来判断灰 / 黄 / 红。
+ *  第 n 个分类按记账页的排列顺序数，从 1 开始 */
+const dotClass = (n) => page.$eval(`.cat-grid .cat-item:nth-child(${n}) .cat-dot`, (el) => el.className);
+
+/**
+ * 在「分类管理」里给第 n 个分类设月预算。
+ * 保存只关掉编辑面板，分类管理那一层还开着，所以能连着设好几个。
+ */
+async function setCategoryBudget(n, yuan) {
+  await tap(`.sheet .cat-row:nth-child(${n}) .cat-row-main`);
+  await page.waitForSelector('.sheet [data-role="budget"]', { visible: true, timeout: 8000 });
+  await page.type('.sheet [data-role="budget"]', yuan);
+  await page.click('.sheet-actions .btn-primary');
+  await sleep(420);
+}
+
+/** 把记账页的日期改成某一天，会触发 change（圆点要跟着换月份） */
+const pickDate = (date) =>
+  page.$eval('[data-role="date"]', (el, v) => {
+    el.value = v;
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  }, date);
+
+/**
+ * 用 JS 触发点击，而不是按坐标点。
+ * 记账页一旦出现「本月预算」卡片，内容就比一屏长，「今天/昨天/前天」那一行
+ * 会落到固定底栏底下 —— 按坐标点会打到底栏的「账单」标签上去（踩过一次）。
+ */
+const clickEl = (selector) =>
+  page.evaluate((s) => {
+    const el = document.querySelector(s);
+    if (!el) throw new Error('找不到元素：' + s);
+    el.click();
+  }, selector);
+
 /* ================= 开始 ================= */
 
 await page.goto(URL, { waitUntil: 'networkidle0' });
@@ -244,6 +279,46 @@ await goTab('record');
 await shot('record-budget');
 check('预算：首页提示超支', await text('#view .budget-tip'), '已经超支 38.40 元（已用 138%）');
 
+/* ---- 分类预算 ---- */
+// 三种状态都要覆盖：餐饮 38.50/45 = 86%（黄）、交通 99.90/50（超支红）、
+// 购物 0/200（正常灰）。第 4 个分类故意不设，验证不设就一个圆点都不该有。
+await goTab('settings');
+await tap('[data-act="cats"]');
+await shot('category-manager');
+
+await setCategoryBudget(1, '45');
+check('分类预算：列表显示本月进度', await text('.sheet .cat-row:nth-child(1) .cm-sub'),
+  '1 笔记录在用 · 本月 38.50 / 45.00 元（86%）');
+check('分类预算：花到八成标黄',
+  await page.$eval('.sheet .cat-row:nth-child(1) .cm-sub', (el) => el.classList.contains('warn')), true);
+
+await setCategoryBudget(2, '50');
+check('分类预算：超支文案', await text('.sheet .cat-row:nth-child(2) .cm-sub'),
+  '1 笔记录在用 · 本月 99.90 / 50.00 元（200%）');
+check('分类预算：超支标红',
+  await page.$eval('.sheet .cat-row:nth-child(2) .cm-sub', (el) => el.classList.contains('over')), true);
+
+await setCategoryBudget(3, '200');
+check('分类预算：没记录的分类按 0 算', await text('.sheet .cat-row:nth-child(3) .cm-sub'),
+  '0 笔记录在用 · 本月 0.00 / 200.00 元（0%）');
+await closeOverlays();
+
+await goTab('record');
+await shot('record-category-budget');
+check('分类圆点：餐饮八成黄', await dotClass(1), 'cat-dot warn');
+check('分类圆点：交通超支红', await dotClass(2), 'cat-dot over');
+check('分类圆点：购物正常灰', await dotClass(3), 'cat-dot ok');
+check('分类圆点：没设预算就没有圆点', await count('.cat-grid .cat-item:nth-child(4) .cat-dot'), 0);
+check('分类圆点：补了图例说明', (await text('#view .cat-legend')).startsWith('圆点＝月预算'), true);
+
+// 圆点看的是「所选日期」那个月，不是今天这个月
+await pickDate('2020-01-15');
+await sleep(220);
+check('分类圆点：切到没记录的月份退回正常', await dotClass(2), 'cat-dot ok');
+await clickEl('[data-role="quickdates"] [data-off="0"]');
+await sleep(220);
+check('分类圆点：切回今天又是超支', await dotClass(2), 'cat-dot over');
+
 /* ---- 导出备份 ---- */
 await goTab('settings');
 await tap('[data-act="backup"]');
@@ -256,6 +331,9 @@ check('备份：含 3 笔记录', backup.transactions.length, 3);
 check('备份：含 1 个账本', backup.ledgers.length, 1);
 check('备份：带上了预算', backup.ledgers[0].budgetFen, 10000);
 check('备份：带上了分类', backup.categories.length, 14);
+const budgetedCats = backup.categories.filter((c) => c.budgetFen);
+check('备份：分类月预算跟着走', budgetedCats.length, 3);
+check('备份：餐饮月预算 45 元', budgetedCats.find((c) => c.name === '餐饮').budgetFen, 4500);
 
 /* ---- 新增分类 ---- */
 await tap('[data-act="cats"]');
@@ -314,6 +392,8 @@ check('还原：账本回到 1 个', await text('[data-act="ledgers"] .sr-main')
 check('还原：分类回到 14 个（宠物被覆盖掉）', await text('[data-act="cats"] .sr-val'), '14 个');
 check('还原：预算恢复成备份里的 100', await text('[data-act="budget"] .sr-val'), '100.00 元');
 check('还原：本机主题偏好没被重置', await page.$eval('html', (el) => el.dataset.theme), themeBeforeRestore);
+await goTab('record');
+check('还原：分类预算也一起回来了', await dotClass(2), 'cat-dot over');
 
 /* ---- 截图看一眼当前主题 ---- */
 await goTab('stats');

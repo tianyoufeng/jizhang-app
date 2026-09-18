@@ -62,6 +62,11 @@ html, body {
 
 body { -webkit-font-smoothing: antialiased; }
 
+/* [hidden] 的 UA 样式是 display:none，但作者样式里任何一条 display 都能盖掉它。
+   .field 是 display:flex —— 分类编辑面板里那格「月预算」靠 hidden 藏，
+   少了这条兜底就永远藏不住。全局钉死，省得以后再踩。 */
+[hidden] { display: none !important; }
+
 #app {
   min-height: 100%;
   display: flex;
@@ -260,6 +265,7 @@ html[data-theme="dark"] #themeToggle .ico-sun { display: block; }
   gap: 6px;
 }
 .cat-item {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -276,12 +282,27 @@ html[data-theme="dark"] #themeToggle .ico-sun { display: block; }
 }
 .cat-item .cat-emoji { font-size: 21px; line-height: 1; }
 .cat-item .cat-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+/* 设了月预算的支出分类，右上角一个小圆点：正常灰、八成黄、超支红 */
+.cat-item .cat-dot {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-3);
+}
+.cat-item .cat-dot.warn { background: var(--warn); }
+.cat-item .cat-dot.over { background: var(--danger); }
 .cat-item.active {
   border-color: var(--primary);
   background: var(--primary-soft);
   color: var(--primary);
   font-weight: 600;
+  /* 选中态底色是浅蓝，灰点在上面几乎看不见，压深一档 */
 }
+.cat-item.active .cat-dot { background: var(--text-2); }
+.cat-legend { font-size: 12px; color: var(--text-3); margin: 10px 0 0; }
 
 .field-grid { display: grid; gap: 10px; }
 .field { display: flex; align-items: center; gap: 10px; }
@@ -690,6 +711,9 @@ html[data-theme="dark"] .toast-action { color: #1b5fb8; }
 .cat-row .cm-body { flex: 1; min-width: 0; }
 .cat-row .cm-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cat-row .cm-sub { font-size: 12px; color: var(--text-3); margin-top: 1px; }
+/* 12px 的小字用 --warn 在浅色底上偏糊，这里用专给文字的那档 */
+.cat-row .cm-sub.warn { color: var(--warn-text); }
+.cat-row .cm-sub.over { color: var(--danger); }
 .cat-row .cm-tools { display: flex; gap: 6px; flex: none; }
 
 .emoji-grid {
