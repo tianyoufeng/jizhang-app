@@ -1,9 +1,13 @@
 import { db, newId } from './db.js';
-import { monthOf, currentMonth } from './utils.js';
+import { currentMonth, periodRange, periodAxisLabel, shiftPeriod, today } from './utils.js';
 
 /** 默认分类：支出 9 个，收入 5 个。
  *  图标一律挑 Unicode 9.0（2016）以前就有的，
- *  免得在旧安卓的 emoji 字体上显示成豆腐块 */
+ *  免得在旧安卓的 emoji 字体上显示成豆腐块。
+ *  唯一的例外是「红包」的 🧧 —— 它要等 Emoji 11.0（Android 9 / 2018）才有。
+ *  但「红包」这个名字除了红包本身没有更贴切的图标：原来用的 💵 是张绿色美钞，
+ *  放在收入分类里颜色也不对（这一版起收统一是红色）。装这个 App 的机器都是
+ *  Android 9 以上，就用了。 */
 const DEFAULT_CATEGORIES = [
   { kind: 'expense', name: '餐饮', emoji: '🍚' },
   { kind: 'expense', name: '交通', emoji: '🚌' },
@@ -15,7 +19,7 @@ const DEFAULT_CATEGORIES = [
   { kind: 'expense', name: '人情', emoji: '🎁' },
   { kind: 'expense', name: '其他', emoji: '📦' },
   { kind: 'income', name: '工资', emoji: '💰' },
-  { kind: 'income', name: '红包', emoji: '💵' },
+  { kind: 'income', name: '红包', emoji: '🧧' },
   { kind: 'income', name: '理财', emoji: '📈' },
   { kind: 'income', name: '兼职', emoji: '💼' },
   { kind: 'income', name: '其他', emoji: '📦' }
@@ -77,7 +81,30 @@ export async function initStore() {
     await db.put('meta', { key: 'currentLedgerId', value: state.meta.currentLedgerId });
   }
 
+  await migrateCategoryIcons();
+
   state.loaded = true;
+}
+
+/**
+ * 一次性数据迁移：把「红包」分类的旧图标换成新的。
+ *
+ * 只改 DEFAULT_CATEGORIES 是不够的 —— 分类数据存在 IndexedDB 里，
+ * 已经在用的手机永远不会再走一遍「首次初始化」，不搬一次的话
+ * 装上新版看到的还是那张绿色美钞。
+ *
+ * 只认「名字还叫红包、图标还是旧的那个」这一种组合：
+ * 用户自己挑过图标的（哪怕是同一个 💵）就不动；改完条件不再成立，
+ * 每次启动重复跑也没有副作用。
+ */
+async function migrateCategoryIcons() {
+  const stale = state.categories.filter(
+    (c) => c.kind === 'income' && c.name === '红包' && c.emoji === '💵'
+  );
+  for (const cat of stale) {
+    cat.emoji = '🧧';
+    await db.put('categories', cat);
+  }
 }
 
 function byOrder(a, b) {
@@ -270,14 +297,20 @@ export async function restoreTransaction(record) {
 /* ---------------- 查询与统计 ---------------- */
 
 /**
- * 某账本的记录，按日期倒序、同日按录入时间倒序。
- * scope='all' 时不再限制月份 —— 以前搜关键字只在当月里找，
- * 想翻「三个月前那笔买空调的钱」得一个月一个月翻过去。
+ * 某账本在某个周期里的记录，按日期倒序、同日按录入时间倒序。
+ *
+ * unit / key 是周期（'week' | 'month' | 'year' 配对应的键，见 utils.js）。
+ * 原来参数写死是「月份」，账单页只能按月看；泛化成周期后，
+ * 按周、按年走的是同一条查询路径，不用各写一份。
+ *
+ * scope='all' 时不再限制时间 —— 搜关键字要能跨全部时间找，
+ * 否则想翻「三个月前那笔买空调的钱」得一个月一个月翻过去。
  */
-export function monthTransactions(month, ledgerId = state.meta.currentLedgerId, { categoryId = '', keyword = '', scope = 'month' } = {}) {
+export function periodTransactions(unit, key, ledgerId = state.meta.currentLedgerId, { categoryId = '', keyword = '', scope = 'period' } = {}) {
   const kw = keyword.trim().toLowerCase();
+  const { start, end } = periodRange(unit, key);
   return transactionsOfLedger(ledgerId)
-    .filter((t) => scope === 'all' || monthOf(t.date) === month)
+    .filter((t) => scope === 'all' || (t.date >= start && t.date <= end))
     .filter((t) => !categoryId || t.categoryId === categoryId)
     .filter((t) => {
       if (!kw) return true;
@@ -287,18 +320,26 @@ export function monthTransactions(month, ledgerId = state.meta.currentLedgerId, 
     .sort((a, b) => (a.date === b.date ? b.createdAt - a.createdAt : b.date.localeCompare(a.date)));
 }
 
-export function monthSummary(month, ledgerId = state.meta.currentLedgerId) {
-  const list = transactionsOfLedger(ledgerId).filter((t) => monthOf(t.date) === month);
+/** 某个周期的收支合计 */
+export function periodSummary(unit, key, ledgerId = state.meta.currentLedgerId) {
+  const { start, end } = periodRange(unit, key);
+  const list = transactionsOfLedger(ledgerId).filter((t) => t.date >= start && t.date <= end);
   const incomeFen = list.filter((t) => t.kind === 'income').reduce((a, t) => a + t.amountFen, 0);
   const expenseFen = list.filter((t) => t.kind === 'expense').reduce((a, t) => a + t.amountFen, 0);
   return { incomeFen, expenseFen, balanceFen: incomeFen - expenseFen, count: list.length };
 }
 
-/** 某月某类型，按分类汇总成 Map<categoryId, { amountFen, count }> */
-export function categoryTotals(month, kind, ledgerId = state.meta.currentLedgerId) {
+/** 「本月」是个常用说法（预算、设置页都按自然月），留个直达的口子 */
+export function monthSummary(month, ledgerId = state.meta.currentLedgerId) {
+  return periodSummary('month', month, ledgerId);
+}
+
+/** 某周期某类型，按分类汇总成 Map<categoryId, { amountFen, count }> */
+export function categoryTotals(unit, key, kind, ledgerId = state.meta.currentLedgerId) {
+  const { start, end } = periodRange(unit, key);
   const map = new Map();
   for (const t of transactionsOfLedger(ledgerId)) {
-    if (t.kind !== kind || monthOf(t.date) !== month) continue;
+    if (t.kind !== kind || t.date < start || t.date > end) continue;
     const entry = map.get(t.categoryId) || { amountFen: 0, count: 0 };
     entry.amountFen += t.amountFen;
     entry.count += 1;
@@ -308,8 +349,8 @@ export function categoryTotals(month, kind, ledgerId = state.meta.currentLedgerI
 }
 
 /** 按分类汇总，金额从大到小 */
-export function categoryBreakdown(month, kind, ledgerId = state.meta.currentLedgerId) {
-  const map = categoryTotals(month, kind, ledgerId);
+export function categoryBreakdown(unit, key, kind, ledgerId = state.meta.currentLedgerId) {
+  const map = categoryTotals(unit, key, kind, ledgerId);
   const total = [...map.values()].reduce((a, e) => a + e.amountFen, 0);
 
   return {
@@ -342,7 +383,8 @@ const BUDGET_WARN_RATIO = 0.8;
  * level 取 'ok' | 'warn' | 'over'。没设预算的分类不在表里。
  */
 export function categoryBudgetMap(month = currentMonth(), ledgerId = state.meta.currentLedgerId) {
-  const spent = categoryTotals(month, 'expense', ledgerId);
+  // 分类预算是按月设的，不管账单页当前在看周还是年，这里都按自然月算
+  const spent = categoryTotals('month', month, 'expense', ledgerId);
   const out = new Map();
 
   for (const cat of state.categories) {
@@ -362,16 +404,24 @@ export function categoryBudgetMap(month = currentMonth(), ledgerId = state.meta.
   return out;
 }
 
-/** 最近 n 个月的收支，从早到晚，用于趋势图 */
-export function monthlyTrend(months, ledgerId = state.meta.currentLedgerId) {
-  return months.map((m) => ({ month: m, ...monthSummary(m, ledgerId) }));
+/**
+ * 以 key 这个周期结尾、往前数 n 个周期的收支，从早到晚，给趋势图用。
+ * 每个点自带一个已经排好的短标签，图表那边不必再关心当前是周是月还是年。
+ */
+export function periodTrend(unit, key, n, ledgerId = state.meta.currentLedgerId) {
+  const out = [];
+  for (let i = n - 1; i >= 0; i -= 1) {
+    const k = shiftPeriod(unit, key, -i);
+    out.push({ key: k, label: periodAxisLabel(unit, k), ...periodSummary(unit, k, ledgerId) });
+  }
+  return out;
 }
 
-/** 有记录的最早月份，用于限制往前翻的边界 */
-export function earliestMonth(ledgerId = state.meta.currentLedgerId) {
+/** 有记录的最早一天，用于限制往前翻的边界 */
+export function earliestDate(ledgerId = state.meta.currentLedgerId) {
   const list = transactionsOfLedger(ledgerId);
-  if (!list.length) return currentMonth();
-  return list.reduce((min, t) => (monthOf(t.date) < min ? monthOf(t.date) : min), monthOf(list[0].date));
+  if (!list.length) return today();
+  return list.reduce((min, t) => (t.date < min ? t.date : min), list[0].date);
 }
 
 /* ---------------- 导入导出 ---------------- */

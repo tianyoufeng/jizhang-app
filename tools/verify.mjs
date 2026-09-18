@@ -170,6 +170,14 @@ await sleep(350);
 
 await page.evaluate(() => document.querySelector('#view .seg button[data-kind="income"]').click());
 await sleep(150);
+
+// 「红包」原来画的是 💵（绿色美钞），和「收入」的红字不搭，也不像红包
+const incomeCats = await page.$$eval('.cat-grid .cat-item', (els) =>
+  els.map((e) => e.innerText.replace(/\s+/g, ' ').trim())
+);
+check('红包：图标是红色的 🧧', incomeCats.includes('🧧 红包'), true);
+check('红包：旧的绿色美钞已经不在', incomeCats.some((t) => t.includes('💵')), false);
+
 await page.type('#amountInput', '8000');
 await page.click('.cat-grid .cat-item:nth-child(1)');            // 工资
 await page.click('[data-role="save"]');
@@ -184,6 +192,48 @@ check('账单：支出合计', (await sums())[1], '50.50');
 check('账单：结余', (await sums())[2], '7,949.50');
 check('账单：记录条数', await count('.tx'), 3);
 check('账单：备注里的逗号引号正常显示', await text('.tx .tx-note'), '午饭, 和同事"聚餐"');
+
+/* ---- 配色：红＝收入、绿＝支出 ---- */
+// 按 RGB 通道关系判断，不写死具体色值：以后微调配色这几个断言不用改
+const rgbOf = async (sel) =>
+  (await page.$eval(sel, (el) => getComputedStyle(el).color)).match(/\d+/g).slice(0, 3).map(Number);
+const incomeRGB = await rgbOf('.summary .s-val.income');
+const expenseRGB = await rgbOf('.summary .s-val.expense');
+check('配色：收入的数字是红的', incomeRGB[0] > 150 && incomeRGB[0] > incomeRGB[1] + 50 && incomeRGB[0] > incomeRGB[2] + 50, true);
+check('配色：支出的数字是绿的', expenseRGB[1] > 100 && expenseRGB[1] > expenseRGB[0] + 50, true);
+const incomeKeyRGB = await rgbOf('.summary .s-key.income');
+check('配色：「收入」这两个字也跟着红了', incomeKeyRGB[0] > 150 && incomeKeyRGB[0] > incomeKeyRGB[1] + 50, true);
+
+/* ---- 账单：周 / 月 / 年三种粒度 ---- */
+// 这几条跟「今天是几号」有关，预期值按同一套规则在 Node 里算好，
+// 免得写死「9月」到下个月就红。一周从周一开始，和 src/utils.js 保持一致。
+const nowD = new Date();
+const mLabel = (y, m) => (y === nowD.getFullYear() ? `${m}月` : `${y}年${m}月`);
+const curMonth = mLabel(nowD.getFullYear(), nowD.getMonth() + 1);
+const daysAgoStr = (n) => {
+  const d = new Date(nowD);
+  d.setDate(d.getDate() - n);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
+// 在当月切「按周」，要落在含今天的那一周，而不是月初那一周（踩过这个坑）
+await clickEl('[data-role="scope"] [data-scope="week"]');
+await sleep(240);
+check('账单：按周能看到本周这 3 笔', await count('.tx'), 3);
+check('账单：按周的标题是日期区间', /^\d{1,2}月\d{1,2}日–/.test(await text('.m-label')), true);
+// 现在所有记录都在今天，没有更早的周期可翻，箭头就该是禁用的
+check('账单：没有更早的记录时，往前翻的箭头禁用',
+  await page.$eval('.month-nav [data-role="prev"]', (el) => el.disabled), true);
+
+await clickEl('[data-role="scope"] [data-scope="year"]');
+await sleep(240);
+check('账单：按年能看到 3 笔', await count('.tx'), 3);
+check('账单：按年的标题带年份', /^\d{4}年$/.test(await text('.m-label')), true);
+check('账单：按年的合计和按月一致', (await sums())[1], '50.50');
+
+await clickEl('[data-role="scope"] [data-scope="month"]');
+await sleep(240);
+check('账单：从「年」切回「月」保持在同一段', await text('.m-label'), curMonth);
 
 /* ---- 编辑：交通 12 → 99.9 ---- */
 await tapTxOf('交通');
@@ -221,12 +271,12 @@ await page.select('[data-role="cat"]', catValue);
 await sleep(350);
 await shot('list-filtered');
 check('筛选：只剩餐饮 1 笔', await count('.tx'), 1);
-check('筛选：标题标出条数', await text('.m-label'), '9月 · 筛选出 1 笔');
+check('筛选：标题标出条数', await text('.m-label'), `${curMonth} · 筛选出 1 笔`);
 check('筛选：合计跟着筛选走', (await sums())[1], '38.50');
 
 /* ---- 从底栏重进账单，筛选应该被清掉 ---- */
 await goTab('list');
-check('重进账单：筛选已清空', await text('.m-label'), '9月');
+check('重进账单：筛选已清空', await text('.m-label'), curMonth);
 check('重进账单：记录都回来了', await count('.tx'), 3);
 
 /* ---- 搜索 ---- */
@@ -238,6 +288,26 @@ await goTab('list');
 /* ---- 统计 ---- */
 await goTab('stats');
 await shot('stats-expense');
+
+/* ---- 统计：周 / 月 / 年 ---- */
+check('统计：默认按月的标题', await text('#view .card-title'), `${curMonth}总结`);
+await clickEl('#view [data-role="scope"] [data-scope="week"]');
+await sleep(260);
+check('统计：按周的标题是日期区间', /^\d{1,2}月\d{1,2}日–/.test(await text('#view .m-label')), true);
+check('统计：按周算出同一批支出', (await sums())[1], '138.40');
+check('统计：按周的环比说的是「上周」', (await text('#view .delta')).includes('上周'), true);
+
+await clickEl('#view [data-role="scope"] [data-scope="year"]');
+await sleep(260);
+await shot('stats-year');
+check('统计：按年的标题', /^\d{4}年总结$/.test(await text('#view .card-title')), true);
+check('统计：按年合计一致', (await sums())[1], '138.40');
+check('统计：趋势图跟着换成按年', await text('#view .card:last-child .card-title'), '最近 6 年趋势');
+
+await clickEl('#view [data-role="scope"] [data-scope="month"]');
+await sleep(260);
+check('统计：从「年」切回「月」保持在同一段', await text('#view .m-label'), curMonth);
+
 const pieRows = await page.$$eval('[data-role="pie"] .legend-row', (els) =>
   els.map((e) => e.innerText.replace(/\s+/g, ' ').trim())
 );
@@ -371,9 +441,24 @@ check('账本：切回来预算是自己的', await text('#view .budget-line'), 
 
 /* ---- 备份还原 ---- */
 // 先换个主题，验证还原备份不会把本机偏好一起重置
+// 顺手核对主题按钮：原来那枚灰线图标压在白顶栏上几乎看不见
+const toggleBg = () => page.$eval('#themeToggle', (el) => getComputedStyle(el).backgroundColor);
+const iconShown = (cls) => page.$eval(`#themeToggle .${cls}`, (el) => getComputedStyle(el).display !== 'none');
+const themeBeforeToggle = await page.$eval('html', (el) => el.dataset.theme);
+check('主题按钮：有高亮底色，不是透明的', (await toggleBg()) !== 'rgba(0, 0, 0, 0)', true);
+check('主题按钮：浅色下显示月亮', await iconShown('ico-moon'), themeBeforeToggle !== 'dark');
+check('主题按钮：浅色下藏起太阳', await iconShown('ico-sun'), themeBeforeToggle === 'dark');
+check('主题按钮：图标是暖色的，不是灰的', await page.$eval('#themeToggle', (el) => {
+  const [r, g, b] = getComputedStyle(el).color.match(/\d+/g).map(Number);
+  return r > b && r > 100;   // 暖色：红通道压过蓝通道
+}), true);
+
 await tap('#themeToggle');
 await sleep(200);
 const themeBeforeRestore = await page.$eval('html', (el) => el.dataset.theme);
+check('主题按钮：点一下就切到另一个主题', themeBeforeRestore !== themeBeforeToggle, true);
+check('主题按钮：深色下换成太阳', await iconShown('ico-sun'), themeBeforeRestore === 'dark');
+check('主题按钮：深色下收起月亮', await iconShown('ico-moon'), themeBeforeRestore !== 'dark');
 
 await goTab('settings');
 await tap('[data-act="restore"]');
@@ -395,6 +480,31 @@ check('还原：本机主题偏好没被重置', await page.$eval('html', (el) =
 await goTab('record');
 check('还原：分类预算也一起回来了', await dotClass(2), 'cat-dot over');
 
+/* ---- 老数据的自动迁移 ---- */
+// 先把备份里的「红包」图标改回旧的绿钞 💵，再恢复一次。
+// 分类是存在本机的，光改默认值对已经装过旧版的人没用，必须搬一次
+const legacy = JSON.parse(backupRaw);
+legacy.categories.find((c) => c.name === '红包').emoji = '💵';
+const legacyPath = join(tmpdir(), `jizhang-legacy-${Date.now()}.json`);
+writeFileSync(legacyPath, JSON.stringify(legacy), 'utf8');
+
+await goTab('settings');
+await tap('[data-act="restore"]');
+const legacyChooser = page.waitForFileChooser({ timeout: 8000 });
+await tap('.dialog-mask [data-act="ok"]');
+await (await legacyChooser).accept([legacyPath]);
+await sleep(700);
+await tap('.dialog-mask [data-act="ok"]');
+await sleep(400);
+
+await goTab('record');
+await page.evaluate(() => document.querySelector('#view .seg button[data-kind="income"]').click());
+await sleep(240);
+const migratedCats = await page.$$eval('.cat-grid .cat-item', (els) =>
+  els.map((e) => e.innerText.replace(/\s+/g, ' ').trim())
+);
+check('迁移：备份里带进来的旧图标 💵 被自动换成 🧧', migratedCats.includes('🧧 红包'), true);
+
 /* ---- 截图看一眼当前主题 ---- */
 await goTab('stats');
 await shot('theme-stats');
@@ -409,6 +519,150 @@ await shot('after-reload');
 check('刷新：数据还在', await count('.tx'), 3);
 check('刷新：金额没变', (await sums())[1], '138.40');
 check('刷新：主题选择记住了', await page.$eval('html', (el) => el.dataset.theme), themeBeforeRestore);
+
+/* ---- 补一组浅色 / 深色的对照截图 ---- */
+// 无头浏览器开局是深色，中途又被切过一次，所以这里不假设当前是哪种，
+// 明确先切到浅色再拍 —— 免得拍出一组名字叫 light 其实是 dark 的图
+if ((await page.$eval('html', (el) => el.dataset.theme)) === 'dark') {
+  await tap('#themeToggle');
+  await sleep(240);
+}
+check('浅色截图：当前确实是浅色', await page.$eval('html', (el) => el.dataset.theme), 'light');
+await goTab('list');
+await shot('theme-list-light');
+await goTab('record');
+await shot('theme-record-light');
+
+/* ---- 补一笔上周的账，把「往前翻周期」真的走一遍 ---- */
+// 前面所有记录都记在今天，往前翻的箭头一直是禁用的，翻页逻辑等于没测到
+await goTab('record');
+await page.evaluate(() => document.querySelector('#view .seg button[data-kind="expense"]').click());
+await sleep(160);
+await page.type('#amountInput', '7');
+await clickEl('.cat-grid .cat-item:nth-child(1)');       // 餐饮
+await pickDate(daysAgoStr(7));
+await sleep(220);
+await clickEl('[data-role="save"]');
+await sleep(500);
+
+await goTab('list');
+await clickEl('[data-role="scope"] [data-scope="week"]');
+await sleep(260);
+check('翻周期：本周仍是 3 笔，上周那笔不算进来', await count('.tx'), 3);
+const thisWeekLabel = await text('.m-label');
+
+await clickEl('.month-nav [data-role="prev"]');
+await sleep(260);
+await shot('list-last-week');
+check('翻周期：往前一周找到了上周那笔', await count('.tx'), 1);
+check('翻周期：标题跟着翻页变', (await text('.m-label')) !== thisWeekLabel, true);
+check('翻周期：上周合计 7.00', (await sums())[1], '7.00');
+
+await clickEl('.month-nav [data-role="next"]');
+await sleep(260);
+check('翻周期：再翻回来又是本周', await text('.m-label'), thisWeekLabel);
+
+await clickEl('[data-role="scope"] [data-scope="year"]');
+await sleep(260);
+check('翻周期：按年能看到全部 4 笔', await count('.tx'), 4);
+await clickEl('[data-role="scope"] [data-scope="month"]');
+await sleep(260);
+check('翻周期：按月能看到全部 4 笔', await count('.tx'), 4);
+// 4 笔都还在本月（今天 3 笔 + 上周 1 笔），往前翻会翻到一个空月份，
+// 所以箭头该是禁用的 —— 和按周那条约边界规则一致
+check('翻周期：数据都还在本月时，按月往前翻的箭头禁用',
+  await page.$eval('.month-nav [data-role="prev"]', (el) => el.disabled), true);
+
+// 收拾干净：回上周把那笔删掉，别给后面的截图留下多余数据
+await clickEl('[data-role="scope"] [data-scope="week"]');
+await clickEl('.month-nav [data-role="prev"]');
+await sleep(260);
+await tapTxOf('餐饮');
+await tap('[data-act="del"]');
+await tap('.dialog-mask [data-act="ok"]');
+await sleep(450);
+check('收拾：补的那笔删掉了，上周又空了', await count('.tx'), 0);
+await clickEl('[data-role="scope"] [data-scope="week"]');    // 再点一次＝回到当下
+await sleep(260);
+check('收拾：再点一次当前粒度＝回到本周', await text('.m-label'), thisWeekLabel);
+check('收拾：回到本周还是 3 笔', await count('.tx'), 3);
+
+/* ================= 产出 README 用的截图 =================
+ *
+ * README 里那 5 张图以前是手工从 tools/shots/ 里挑的，挑的时候容易带进
+ * 操作提示条（浮在底部，会盖住图例），而且每次发版都要重新挑一遍。
+ * 这里按固定状态重拍一组，直接写进 docs/screenshots/ —— 发版时跑一次 verify 就够。
+ */
+const DOCS = 'docs/screenshots';
+mkdirSync(DOCS, { recursive: true });
+
+// 走查时用的是真机尺寸 390×844，内容一长（比如出现了「本月预算」卡片）就会超出一屏：
+// 截图里会带上滚动条、备注和保存按钮被挤到屏幕外。README 的图要的是「整页一览」，
+// 所以这几张换一个高一点的视口拍，拍完再换回来。
+await page.setViewport({ width: 390, height: 1000, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+await sleep(240);
+
+// 提示条是浮层，截图前先清掉
+const clearToasts = () =>
+  page.evaluate(() => {
+    const r = document.getElementById('toastRoot');
+    if (r) r.innerHTML = '';
+  });
+const docShot = async (name) => {
+  await clearToasts();
+  await sleep(320);
+  await page.screenshot({ path: `${DOCS}/${name}.png` });
+};
+
+// 上面拍浅色对照图时切过一次，这里统一先回深色，别拍出一次深一次浅的组图
+if ((await page.$eval('html', (el) => el.dataset.theme)) !== 'dark') {
+  await tap('#themeToggle');
+  await sleep(260);
+}
+
+/** 记账页填好一笔但不保存 —— 比空表单有信息量 */
+const fillRecordForm = async () => {
+  await page.evaluate(() => document.querySelector('#view .seg button[data-kind="expense"]').click());
+  await sleep(160);
+  await page.type('#amountInput', '38.5');
+  await clickEl('.cat-grid .cat-item:nth-child(1)'); // 餐饮
+  await page.type('[data-role="note"]', '午饭，和同事聚餐');
+  await sleep(200);
+};
+
+// 1. 记账页（深色）
+await goTab('record');
+await fillRecordForm();
+await docShot('1-record');
+
+// 2. 账单页：按月看当月
+await goTab('list');
+await clickEl('[data-role="scope"] [data-scope="month"]');
+await sleep(300);
+await docShot('2-list');
+
+// 3. 统计页：按月、支出构成
+await goTab('stats');
+await clickEl('[data-role="scope"] [data-scope="month"]');
+await sleep(300);
+await docShot('3-stats');
+
+// 4. 设置页
+await goTab('settings');
+await docShot('4-settings');
+
+// 5. 浅色主题下的记账页，和 1-record 构成深浅对照
+//    （切主题只改 data-theme、不重渲染，所以第 1 步填的表单还在）
+await tap('#themeToggle');
+await sleep(280);
+await goTab('record');
+await fillRecordForm();
+await docShot('5-light');
+
+console.log(`\nREADME 截图 5 张 → ${DOCS}/`);
+
+// 换回走查用的真机尺寸
+await page.setViewport({ width: 390, height: 844, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
 
 await browser.close();
 

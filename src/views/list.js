@@ -1,58 +1,68 @@
 import {
-  state, monthTransactions, categoryById, categoriesOf,
-  deleteTransaction, restoreTransaction, currentLedger, earliestMonth, addTransaction
+  state, periodTransactions, categoryById, categoriesOf,
+  deleteTransaction, restoreTransaction, currentLedger, earliestDate, addTransaction
 } from '../store.js';
-import { money, today, currentMonth, shiftMonth, monthLabel, dateLabel, escapeHtml, sum, totals } from '../utils.js';
+import {
+  money, today, currentPeriod, periodKey, periodLabel, shiftPeriod, convertPeriod,
+  dateLabel, escapeHtml, sum, totals, PERIOD_UNITS, PERIOD_BTN_TEXT, PERIOD_THIS_TEXT
+} from '../utils.js';
 import { openSheet, confirmDialog, toast } from '../ui.js';
 import { mountTxForm } from './txForm.js';
 
 const view = {
-  month: currentMonth(),
+  // unit 是「看多久」：一周 / 一个月 / 一年
+  unit: 'month',
+  // key 是周期键（见 utils.js）：周='那周的周一'、月='YYYY-MM'、年='YYYY'
+  key: currentPeriod('month'),
   categoryId: '',
   keyword: '',
-  // 'month' 只看当月，'all' 跨全部时间 —— 搜旧记录不用一个月一个月翻
-  scope: 'month'
+  // 'period' 只看当前周期，'all' 跨全部时间 —— 搜旧记录不用一个周期一个周期翻
+  scope: 'period'
 };
 
 export function resetListView() {
-  view.month = currentMonth();
+  // 粒度是「看的方式」，不该被清掉；清的是筛选条件和翻到的位置
+  view.key = currentPeriod(view.unit);
   view.categoryId = '';
   view.keyword = '';
-  view.scope = 'month';
+  view.scope = 'period';
 }
 
 export function renderList(root) {
-  if (view.month > currentMonth()) view.month = currentMonth();
+  const unit = view.unit;
+  if (view.key > currentPeriod(unit)) view.key = currentPeriod(unit);
 
   const ledger = currentLedger();
-  const list = monthTransactions(view.month, ledger.id, {
+  const list = periodTransactions(unit, view.key, ledger.id, {
     categoryId: view.categoryId,
     keyword: view.keyword,
     scope: view.scope
   });
   const filtering = Boolean(view.categoryId || view.keyword.trim());
   const allTime = view.scope === 'all';
-  // 筛选时合计跟着筛选结果走，免得看了只有餐饮的列表却对上全月的支出
+  // 筛选时合计跟着筛选结果走，免得看了只有餐饮的列表却对上全周期的支出
   const summary = totals(list);
 
-  const atEarliest = view.month <= earliestMonth(ledger.id);
-  const atLatest = view.month >= currentMonth();
+  const atEarliest = view.key <= periodKey(unit, earliestDate(ledger.id));
+  const atLatest = view.key >= currentPeriod(unit);
 
   root.innerHTML = `
     <div class="scope" data-role="scope">
-      <button type="button" data-scope="month" class="${allTime ? '' : 'active'}">按月</button>
+      ${PERIOD_UNITS.map(
+        (u) => `<button type="button" data-scope="${u}" class="${!allTime && unit === u ? 'active' : ''}">${PERIOD_BTN_TEXT[u]}</button>`
+      ).join('')}
       <button type="button" data-scope="all" class="${allTime ? 'active' : ''}">全部时间</button>
     </div>
 
     ${allTime ? '' : `<div class="month-nav">
       <button type="button" class="m-arrow" data-role="prev" ${atEarliest ? 'disabled' : ''}>‹</button>
-      <span class="m-label">${escapeHtml(monthLabel(view.month))}${filtering ? ` · 筛选出 ${list.length} 笔` : ''}</span>
+      <span class="m-label">${escapeHtml(periodLabel(unit, view.key))}${filtering ? ` · 筛选出 ${list.length} 笔` : ''}</span>
       <button type="button" class="m-arrow" data-role="next" ${atLatest ? 'disabled' : ''}>›</button>
     </div>`}
 
     <div class="summary">
-      <div><div class="s-val income">${escapeHtml(money(summary.incomeFen))}</div><div class="s-key">收入</div></div>
-      <div><div class="s-val expense">${escapeHtml(money(summary.expenseFen))}</div><div class="s-key">支出</div></div>
+      <div><div class="s-val income">${escapeHtml(money(summary.incomeFen))}</div><div class="s-key income">收入</div></div>
+      <div><div class="s-val expense">${escapeHtml(money(summary.expenseFen))}</div><div class="s-key expense">支出</div></div>
       <div><div class="s-val balance">${escapeHtml(money(summary.balanceFen))}</div><div class="s-key">结余</div></div>
     </div>
 
@@ -71,23 +81,43 @@ export function renderList(root) {
   `;
 
   const listEl = root.querySelector('[data-role="list"]');
-  listEl.innerHTML = list.length ? groupByDay(list, allTime) : emptyState(filtering, allTime);
+  listEl.innerHTML = list.length ? groupByDay(list, allTime) : emptyState(filtering, allTime, unit);
 
   root.querySelector('[data-role="scope"]').addEventListener('click', (e) => {
     const btn = e.target.closest('[data-scope]');
-    if (!btn || btn.dataset.scope === view.scope) return;
-    view.scope = btn.dataset.scope;
+    if (!btn) return;
+    const next = btn.dataset.scope;
+
+    if (next === 'all') {
+      if (allTime) return;
+      view.scope = 'all';
+      renderList(root);
+      return;
+    }
+    if (!allTime && unit === next) {
+      // 再点一次当前这个粒度＝回到当下，和底栏「再点一次当前 tab 回到顶部」一个路子。
+      // 翻了好几页想跳回来时，比一格一格按回去省事
+      if (view.key === currentPeriod(unit)) return;
+      view.key = currentPeriod(unit);
+      renderList(root);
+      return;
+    }
+    // 换粒度但不丢位置：拿当前周期的第一天去换算新粒度，
+    // 否则翻到 3 月再点「按年」会猛地蹦回 12 月
+    view.key = convertPeriod(unit, view.key, next);
+    view.unit = next;
+    view.scope = 'period';
     renderList(root);
   });
 
   const prevBtn = root.querySelector('[data-role="prev"]');
   if (prevBtn) {
     prevBtn.addEventListener('click', () => {
-      view.month = shiftMonth(view.month, -1);
+      view.key = shiftPeriod(unit, view.key, -1);
       renderList(root);
     });
     root.querySelector('[data-role="next"]').addEventListener('click', () => {
-      view.month = shiftMonth(view.month, 1);
+      view.key = shiftPeriod(unit, view.key, 1);
       renderList(root);
     });
   }
@@ -165,8 +195,12 @@ function groupByDay(list, allTime) {
     .join('');
 }
 
-function emptyState(filtering, allTime) {
-  const title = filtering ? '没有符合条件的记录' : allTime ? '还没有任何记录' : '这个月还没有记账';
+function emptyState(filtering, allTime, unit) {
+  const title = filtering
+    ? '没有符合条件的记录'
+    : allTime
+      ? '还没有任何记录'
+      : `${PERIOD_THIS_TEXT[unit]}还没有记账`;
   return `<div class="empty">
     <span class="empty-ico">${filtering ? '🔍' : '🗒️'}</span>
     ${title}
@@ -245,7 +279,8 @@ async function copyToToday(tx, root) {
     note: tx.note
   });
   toast('已复制到今天');
-  if (view.scope !== 'all' && view.month !== currentMonth()) view.month = currentMonth();
+  // 复制到今天了，视图也要跟回当下那个周期，不然那笔新记录落在视野外
+  if (view.scope !== 'all' && view.key !== currentPeriod(view.unit)) view.key = currentPeriod(view.unit);
   renderList(root);
 }
 
@@ -266,11 +301,12 @@ function openEditor(tx, root) {
 }
 
 /* 让「跳转到某分类」这类外部操作能改到筛选条件 */
-export function setListFilter({ month, categoryId } = {}) {
-  if (month) view.month = month;
+export function setListFilter({ unit, key, categoryId } = {}) {
+  if (unit) view.unit = unit;
+  if (key) view.key = key;
   if (categoryId !== undefined) view.categoryId = categoryId;
-  // 点统计页图例进来的是「某个月的某个分类」，留在按月视图更符合预期
-  if (month) view.scope = 'month';
+  // 点统计页图例进来的是「某个周期里的某个分类」，留在周期视图更符合预期
+  if (key) view.scope = 'period';
 }
 
 export { view as listView };

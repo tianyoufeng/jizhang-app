@@ -1,4 +1,4 @@
-import { money, colorAt, escapeHtml, monthLabel } from './utils.js';
+import { money, colorAt, escapeHtml } from './utils.js';
 
 /**
  * 两个图的 viewBox 宽度统一按「实际渲染宽度」来设计。
@@ -16,10 +16,11 @@ const VIEW_W = 320;
 /**
  * items: [{ name, emoji, amountFen, pct }]
  * 用 SVG 画环形图。只有一段时画整圆，避免 arc 退化。
+ * emptyText 要跟着「支出 / 收入」换 —— 收入构成是空的时候说「还没有支出记录」很怪。
  */
-export function pieChart(items, { size = VIEW_W, thickness = 48 } = {}) {
+export function pieChart(items, { size = VIEW_W, thickness = 48, emptyText = '这段时间还没有记录' } = {}) {
   const total = items.reduce((a, i) => a + i.amountFen, 0);
-  if (!total) return '<div class="empty">还没有支出记录</div>';
+  if (!total) return `<div class="empty">${escapeHtml(emptyText)}</div>`;
 
   const r = (size - thickness) / 2;
   const cx = size / 2;
@@ -80,10 +81,15 @@ function donut(cx, cy, r, thickness, a0, a1) {
 /* ---------------- 趋势柱状图 ---------------- */
 
 /**
- * trend: [{ month, incomeFen, expenseFen }]
- * 每个月两根柱子，收入绿、支出红。y 轴按最大值自适应，带三条刻度线。
+ * trend: [{ key, label, incomeFen, expenseFen }]
+ * 每个周期两根柱子（某月 / 某周 / 某年），红＝收入、绿＝支出。
+ * y 轴按最大值自适应，带三条刻度线。
+ *
+ * 横轴文字直接用调用方给的 label：作图的人不该知道「周」和「年」的区别，
+ * 何况一周的标题『9月14日–20日』塞进坐标轴必然糊成一团，
+ * 短标签由 periodAxisLabel 统一裁好。
  */
-export function trendChart(trend, { height = 190 } = {}) {
+export function trendChart(trend, { height = 190, emptyText = '这段时间还没有记录', ariaLabel = '收支趋势柱状图' } = {}) {
   const W = VIEW_W;
   const H = height;
   const padL = 42;   // 留给 y 轴刻度文字
@@ -109,7 +115,7 @@ export function trendChart(trend, { height = 190 } = {}) {
       return `
         <rect x="${(cx - barW - 2).toFixed(1)}" y="${yEx}" width="${barW}" height="${Math.max(hEx, t.expenseFen ? 2 : 0)}" rx="2.5" fill="var(--expense)" />
         <rect x="${(cx + 2).toFixed(1)}" y="${yIn}" width="${barW}" height="${Math.max(hIn, t.incomeFen ? 2 : 0)}" rx="2.5" fill="var(--income)" />
-        <text x="${cx.toFixed(1)}" y="${H - 10}" text-anchor="middle" font-size="13" fill="var(--text-3)">${escapeHtml(monthLabel(t.month))}</text>`;
+        <text x="${cx.toFixed(1)}" y="${H - 10}" text-anchor="middle" font-size="13" fill="var(--text-3)">${escapeHtml(t.label)}</text>`;
     })
     .join('');
 
@@ -130,7 +136,7 @@ export function trendChart(trend, { height = 190 } = {}) {
   const hasData = trend.some((t) => t.incomeFen || t.expenseFen);
 
   return `<div class="chart-wrap">
-    <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="最近几个月收支趋势柱状图">
+    <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${escapeHtml(ariaLabel)}">
       ${gridlines}
       ${bars}
     </svg>
@@ -139,7 +145,7 @@ export function trendChart(trend, { height = 190 } = {}) {
     <span class="legend-item"><i class="legend-dot" style="background:var(--income)"></i>收入</span>
     <span class="legend-item"><i class="legend-dot" style="background:var(--expense)"></i>支出</span>
   </div>
-  ${hasData ? '' : '<div class="muted" style="margin-top:8px">这几个月还没有记录</div>'}`;
+  ${hasData ? '' : `<div class="muted" style="margin-top:8px">${escapeHtml(emptyText)}</div>`}`;
 }
 
 /** y 轴刻度用的简短金额：1 万元以上折成「万」，免得刻度文字太长挤掉绘图区 */
