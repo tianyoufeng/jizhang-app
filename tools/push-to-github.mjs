@@ -69,21 +69,53 @@ if (supportsSystemCa && !process.execArgv.includes('--use-system-ca')) {
   }
 }
 
-async function api(path, body, method = 'POST') {
-  const res = await fetch(`https://api.github.com${path}`, {
-    method,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: 'application/vnd.github+json',
-      'X-GitHub-Api-Version': '2022-11-28',
-      'Content-Type': 'application/json',
-      'User-Agent': 'push-to-github-script'
-    },
-    body: body ? JSON.stringify(body) : undefined
-  });
-  const text = await res.text();
-  if (!res.ok) throw new Error(`${method} ${path} → ${res.status}\n${text}`);
-  return text ? JSON.parse(text) : null;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** 退避间隔：指数增长 + 随机抖动，免得几个并发请求同时重试、又一起撞墙 */
+const backoff = (n) => Math.min(500 * 2 ** n, 8000) + Math.floor(Math.random() * 400);
+
+/**
+ * 调 GitHub API。
+ *
+ * 5xx 和连接层错误**一律重试**：这个接口偶发 502
+ * （`An error occurred while sending the request`），而且是在传了几十个 blob 之后突然来一下 ——
+ * 没有重试的话整个流程白跑。4xx 不重试，那是请求本身有问题，重试多少次都一样。
+ */
+async function api(path, body, method = 'POST', attempts = 6) {
+  const payload = body ? JSON.stringify(body) : undefined;
+  for (let n = 0; ; n += 1) {
+    let res = null;
+    let text = '';
+    try {
+      res = await fetch(`https://api.github.com${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: 'application/vnd.github+json',
+          'X-GitHub-Api-Version': '2022-11-28',
+          'Content-Type': 'application/json',
+          'User-Agent': 'push-to-github-script'
+        },
+        body: payload
+      });
+      text = await res.text();
+    } catch (err) {
+      // 连接被重置 / 超时，连响应都没拿到
+      if (n + 1 >= attempts) throw err;
+      const wait = backoff(n);
+      console.log(`  ⚠ ${method} ${path} 连接出错（${err.message}），${wait}ms 后重试（${n + 1}/${attempts - 1}）`);
+      await sleep(wait);
+      continue;
+    }
+    if (res.ok) return text ? JSON.parse(text) : null;
+    if (res.status >= 500 && n + 1 < attempts) {
+      const wait = backoff(n);
+      console.log(`  ⚠ ${method} ${path} → ${res.status}，${wait}ms 后重试（${n + 1}/${attempts - 1}）`);
+      await sleep(wait);
+      continue;
+    }
+    throw new Error(`${method} ${path} → ${res.status}\n${text}`);
+  }
 }
 
 const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
@@ -178,7 +210,11 @@ console.log(`文件：${needed.size} 个不同的内容\n`);
 
 const blobRemote = new Map();
 let uploaded = 0;
-const lanes = 6;
+const lanes = 4;
+
+// 超过这个体积的内容单独一个个传：并发上传几 MB 的 blob 时，
+// api.github.com 的网关更容易回 502 —— 安装包和启动图都在这个量级。
+const BIG = 1_000_000;
 
 const uploadOne = async (sha) => {
   const buf = gitBuf('cat-file', 'blob', sha);
@@ -189,8 +225,19 @@ const uploadOne = async (sha) => {
 };
 
 const shaList = [...needed.keys()];
-for (let i = 0; i < shaList.length; i += lanes) {
-  await Promise.all(shaList.slice(i, i + lanes).map(uploadOne));
+const sizeOf = new Map(shaList.map((s) => [s, Number(gitBuf('cat-file', '-s', s).toString().trim())]));
+const bigFiles = shaList.filter((s) => sizeOf.get(s) > BIG);
+const smallFiles = shaList.filter((s) => sizeOf.get(s) <= BIG);
+
+if (bigFiles.length) {
+  console.log(`大文件 ${bigFiles.length} 个（>1MB），改成逐个上传：`);
+  for (const sha of bigFiles) {
+    console.log(`  → ${needed.get(sha)}  ${Math.round(sizeOf.get(sha) / 1024)} KB`);
+  }
+}
+for (const sha of bigFiles) await uploadOne(sha);
+for (let i = 0; i < smallFiles.length; i += lanes) {
+  await Promise.all(smallFiles.slice(i, i + lanes).map(uploadOne));
 }
 
 /* ---------------- 3. 逐个复刻提交 ---------------- */
