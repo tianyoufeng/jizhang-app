@@ -1,10 +1,23 @@
 import { categoriesOf, addTransaction, updateTransaction, currentLedger } from '../store.js';
-import { money, yuanToFen, today, escapeHtml } from '../utils.js';
+import { money, yuanToFen, today, dayAgo, escapeHtml } from '../utils.js';
 import { toast } from '../ui.js';
+
+/** 输入框里只保留「数字 + 一个小数点 + 最多两位小数」 */
+export function sanitizeAmount(raw) {
+  let s = String(raw).replace(/[^\d.]/g, '');
+  const firstDot = s.indexOf('.');
+  if (firstDot !== -1) {
+    // 第二个及以后的小数点全部丢掉
+    s = s.slice(0, firstDot + 1) + s.slice(firstDot + 1).replace(/\./g, '');
+    const [intPart, decPart = ''] = s.split('.');
+    s = `${intPart}.${decPart.slice(0, 2)}`;
+  }
+  return s;
+}
 
 /**
  * 记账表单。记账页和「编辑某笔记录」共用这一套。
- * opts: { tx?, onSaved?, submitLabel?, compact? }
+ * opts: { tx?, onSaved?, submitLabel? }
  */
 export function mountTxForm(root, opts = {}) {
   const editing = Boolean(opts.tx);
@@ -52,6 +65,11 @@ export function mountTxForm(root, opts = {}) {
           <span class="field-label">日期</span>
           <input type="date" data-role="date" />
         </div>
+        <div class="quick-dates" data-role="quickdates">
+          <button type="button" class="chip" data-off="0">今天</button>
+          <button type="button" class="chip" data-off="1">昨天</button>
+          <button type="button" class="chip" data-off="2">前天</button>
+        </div>
         <div class="field">
           <span class="field-label">备注</span>
           <input type="text" data-role="note" maxlength="60" placeholder="选填，例如：和同事聚餐" />
@@ -68,6 +86,7 @@ export function mountTxForm(root, opts = {}) {
   const dateEl = root.querySelector('[data-role="date"]');
   const noteEl = root.querySelector('[data-role="note"]');
   const saveEl = root.querySelector('[data-role="save"]');
+  const quickEl = root.querySelector('[data-role="quickdates"]');
 
   amountEl.value = draft.amount;
   dateEl.value = draft.date;
@@ -98,6 +117,13 @@ export function mountTxForm(root, opts = {}) {
       .join('');
   }
 
+  /** 日期快捷按钮的高亮：只有正好等于今天/昨天/前天时才亮 */
+  function renderQuick() {
+    quickEl.querySelectorAll('[data-off]').forEach((b) => {
+      b.classList.toggle('active', dayAgo(Number(b.dataset.off)) === draft.date);
+    });
+  }
+
   function validate() {
     const fen = yuanToFen(draft.amount);
     if (draft.amount.trim() === '') {
@@ -120,9 +146,17 @@ export function mountTxForm(root, opts = {}) {
     return fen;
   }
 
+  // 进来就把第二个小数点挡掉。以前是原样放行，然后校验时报
+  // 「只能填数字」——可用户确实只输了数字和点，看到会莫名其妙
   amountEl.addEventListener('input', () => {
-    draft.amount = amountEl.value.replace(/[^\d.]/g, '');
-    if (amountEl.value !== draft.amount) amountEl.value = draft.amount;
+    const clean = sanitizeAmount(amountEl.value);
+    if (clean !== amountEl.value) {
+      const pos = amountEl.selectionStart ?? clean.length;
+      amountEl.value = clean;
+      const next = Math.max(0, Math.min(clean.length, pos - 1));
+      amountEl.setSelectionRange(next, next);
+    }
+    draft.amount = clean;
     validate();
   });
 
@@ -151,6 +185,15 @@ export function mountTxForm(root, opts = {}) {
 
   dateEl.addEventListener('change', () => {
     draft.date = dateEl.value || today();
+    renderQuick();
+  });
+
+  quickEl.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-off]');
+    if (!btn) return;
+    draft.date = dayAgo(Number(btn.dataset.off));
+    dateEl.value = draft.date;
+    renderQuick();
   });
 
   noteEl.addEventListener('input', () => {
@@ -201,6 +244,7 @@ export function mountTxForm(root, opts = {}) {
 
   renderSeg();
   renderCats();
+  renderQuick();
   validate();
 
   // 改金额是最常见的修改，打开就把原数字选中，直接输新的就行
@@ -222,6 +266,7 @@ export function mountTxForm(root, opts = {}) {
       noteEl.value = '';
       dateEl.value = draft.date;
       renderCats();
+      renderQuick();
       validate();
     }
   };

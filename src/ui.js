@@ -2,17 +2,46 @@ import { escapeHtml } from './utils.js';
 
 /* ---------------- 轻提示 ---------------- */
 
-export function toast(message, ms = 2000) {
+/**
+ * 轻提示。
+ * opts.ms           停留多久（默认 2000ms）
+ * opts.actionLabel  可选的操作按钮文案，比如「撤销」
+ * opts.onAction     点了那个按钮之后干什么
+ */
+export function toast(message, { ms = 2000, actionLabel = '', onAction = null } = {}) {
   const root = document.getElementById('toastRoot');
+  if (!root) return { dismiss() {} };
+
   const el = document.createElement('div');
   el.className = 'toast';
-  el.textContent = message;
-  root.appendChild(el);
-  setTimeout(() => {
+
+  const text = document.createElement('span');
+  text.textContent = message;
+  el.appendChild(text);
+
+  let timer = null;
+  const dismiss = () => {
+    clearTimeout(timer);
     el.style.transition = 'opacity .25s';
     el.style.opacity = '0';
     setTimeout(() => el.remove(), 260);
-  }, ms);
+  };
+
+  if (actionLabel) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'toast-action';
+    btn.textContent = actionLabel;
+    btn.addEventListener('click', () => {
+      dismiss();
+      onAction?.();
+    });
+    el.appendChild(btn);
+  }
+
+  root.appendChild(el);
+  timer = setTimeout(dismiss, ms);
+  return { dismiss };
 }
 
 /* ---------------- 底部弹层 ---------------- */
@@ -21,7 +50,7 @@ export function toast(message, ms = 2000) {
  * 打开一个从底部滑出的面板。
  * 返回一个带 close() 的句柄，方便在提交后自己关掉。
  */
-export function openSheet({ title = '', body = '', actions = [], onMount } = {}) {
+export function openSheet({ title = '', body = '', actions = [] } = {}) {
   const root = document.getElementById('sheetRoot');
   const mask = document.createElement('div');
   mask.className = 'sheet-mask';
@@ -43,10 +72,6 @@ export function openSheet({ title = '', body = '', actions = [], onMount } = {})
     close() {
       mask.style.animation = 'fade .15s reverse';
       setTimeout(() => mask.remove(), 140);
-    },
-    setTitle(t) {
-      const h = mask.querySelector('h3');
-      if (h) h.textContent = t;
     }
   };
 
@@ -60,7 +85,6 @@ export function openSheet({ title = '', body = '', actions = [], onMount } = {})
       if (a.disabled) btn.disabled = true;
       btn.addEventListener('click', () => a.onClick?.(handle));
       box.appendChild(btn);
-      (a.ref || (() => {}))(btn);
     });
   }
 
@@ -69,7 +93,6 @@ export function openSheet({ title = '', body = '', actions = [], onMount } = {})
   });
 
   root.appendChild(mask);
-  onMount?.(handle);
   return handle;
 }
 
@@ -141,49 +164,4 @@ export function alertDialog({ title = '提示', message = '' } = {}) {
     });
     root.appendChild(mask);
   });
-}
-
-/* ---------------- 底部选择器 ---------------- */
-
-/** 从一组选项里选一个，返回选中项的值；点外面关掉返回 null */
-export function pickOption({ title, options, selected }) {
-  return new Promise((resolve) => {
-    let settled = false;
-    const finish = (val) => {
-      if (settled) return;
-      settled = true;
-      resolve(val);
-    };
-
-    const rows = options
-      .map((o, i) => {
-        const mark = o.value === selected ? '<span class="sr-arrow">✓</span>' : '';
-        return `<button type="button" class="set-row" data-i="${i}">
-          ${o.emoji ? `<span class="sr-ico">${escapeHtml(o.emoji)}</span>` : ''}
-          <span class="sr-main">${escapeHtml(o.label)}${o.sub ? `<span class="sr-sub">${escapeHtml(o.sub)}</span>` : ''}</span>
-          ${mark}
-        </button>`;
-      })
-      .join('');
-
-    const handle = openSheet({ title, body: `<div class="set-list">${rows}</div>` });
-
-    handle.body.querySelectorAll('[data-i]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const value = options[Number(btn.dataset.i)].value;
-        finish(value);
-        handle.close();
-      });
-    });
-
-    handle.el.addEventListener('click', (e) => {
-      if (e.target === handle.el) finish(null);
-    });
-  });
-}
-
-/* ---------------- 表单字段 ---------------- */
-
-export function field(label, controlHtml) {
-  return `<div class="field"><span class="field-label">${escapeHtml(label)}</span>${controlHtml}</div>`;
 }

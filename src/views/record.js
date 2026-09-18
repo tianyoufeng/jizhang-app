@@ -1,6 +1,11 @@
 import { mountTxForm } from './txForm.js';
-import { currentLedger, monthSummary } from '../store.js';
-import { money, currentMonth, escapeHtml } from '../utils.js';
+import { state, currentLedger, monthSummary, setMeta } from '../store.js';
+import { money, currentMonth, daysBetween, escapeHtml } from '../utils.js';
+import { navigate } from '../nav.js';
+
+const DAY = 86400000;
+const REMIND_AFTER_DAYS = 30;   // 这么久没备份就提醒
+const MUTE_DAYS = 7;            // 点了「知道了」之后安静几天
 
 export function renderRecord(root) {
   const ledger = currentLedger();
@@ -8,9 +13,12 @@ export function renderRecord(root) {
   const budget = ledger.budgetFen || 0;
 
   root.innerHTML = `
+    ${reminderCard()}
     ${budget > 0 ? budgetCard(summary.expenseFen, budget) : ''}
     <div data-role="form"></div>
   `;
+
+  bindReminder(root);
 
   mountTxForm(root.querySelector('[data-role="form"]'), {
     onSaved: () => {
@@ -18,6 +26,42 @@ export function renderRecord(root) {
       renderRecord(root);
     }
   });
+}
+
+/**
+ * 备份提醒。数据只在本机、系统云备份又是关的，
+ * README 里一直劝人定期备份，但 App 自己从来不提。
+ */
+function reminderCard() {
+  const last = state.meta.lastBackupAt || 0;
+  const mutedUntil = state.meta.backupReminderMutedUntil || 0;
+  if (Date.now() < mutedUntil) return '';
+  if (!state.transactions.length) return '';
+
+  // 从没备份过时，按「最早一条记录是多久以前」算
+  const oldest = state.transactions.reduce((min, t) => Math.min(min, t.createdAt || Date.now()), Date.now());
+  const since = Date.now() - (last || oldest);
+  if (since < REMIND_AFTER_DAYS * DAY) return '';
+
+  const days = last ? daysBetween(new Date(last).toISOString().slice(0, 10), new Date().toISOString().slice(0, 10)) : null;
+  const text = last
+    ? `上次备份是 ${days} 天前了。数据只在这台手机里，建议导出一份存到网盘。`
+    : `还没有备份过。数据只在这台手机里，系统云备份也是关的 —— 卸载或者丢手机就全没了。建议导出一份存到网盘。`;
+
+  return `<div class="reminder" data-role="reminder">
+    <span class="rem-main">${escapeHtml(text)}</span>
+    <button type="button" class="rem-close" data-act="reminder-close" aria-label="暂时不提醒">×</button>
+  </div>`;
+}
+
+function bindReminder(root) {
+  const box = root.querySelector('[data-role="reminder"]');
+  if (!box) return;
+  box.querySelector('[data-act="reminder-close"]').addEventListener('click', async () => {
+    await setMeta('backupReminderMutedUntil', Date.now() + MUTE_DAYS * DAY);
+    box.remove();
+  });
+  box.querySelector('.rem-main').addEventListener('click', () => navigate('settings'));
 }
 
 function budgetCard(spentFen, budgetFen) {

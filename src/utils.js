@@ -43,6 +43,22 @@ export function toDateStr(d) {
   return `${y}-${m}-${day}`;
 }
 
+/** 今天往前 n 天的日期字符串。dayAgo(0) 就是今天 */
+export function dayAgo(n = 0) {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return toDateStr(d);
+}
+
+/** 两个日期字符串相差多少天（b - a） */
+export function daysBetween(a, b) {
+  const toMs = (s) => {
+    const [y, m, d] = String(s).split('-').map(Number);
+    return new Date(y, m - 1, d).getTime();
+  };
+  return Math.round((toMs(b) - toMs(a)) / 86400000);
+}
+
 /** 'YYYY-MM-DD' → 'YYYY-MM' */
 export function monthOf(dateStr) {
   return String(dateStr).slice(0, 7);

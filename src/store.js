@@ -1,7 +1,9 @@
 import { db, newId } from './db.js';
 import { monthOf, currentMonth } from './utils.js';
 
-/** 默认分类：支出 9 个，收入 5 个 */
+/** 默认分类：支出 9 个，收入 5 个。
+ *  图标一律挑 Unicode 9.0（2016）以前就有的，
+ *  免得在旧安卓的 emoji 字体上显示成豆腐块 */
 const DEFAULT_CATEGORIES = [
   { kind: 'expense', name: '餐饮', emoji: '🍚' },
   { kind: 'expense', name: '交通', emoji: '🚌' },
@@ -13,7 +15,7 @@ const DEFAULT_CATEGORIES = [
   { kind: 'expense', name: '人情', emoji: '🎁' },
   { kind: 'expense', name: '其他', emoji: '📦' },
   { kind: 'income', name: '工资', emoji: '💰' },
-  { kind: 'income', name: '红包', emoji: '🧧' },
+  { kind: 'income', name: '红包', emoji: '💵' },
   { kind: 'income', name: '理财', emoji: '📈' },
   { kind: 'income', name: '兼职', emoji: '💼' },
   { kind: 'income', name: '其他', emoji: '📦' }
@@ -166,11 +168,35 @@ export async function addCategory(kind, name, emoji) {
     kind,
     name: name.trim(),
     emoji: emoji || '📦',
-    order: sameKind.length
+    order: sameKind.reduce((max, c) => Math.max(max, c.order ?? 0), -1) + 1
   };
   state.categories.push(cat);
   await db.put('categories', cat);
   return cat;
+}
+
+/**
+ * 把某个分类在同类型里上移 / 下移一格。
+ * 原来 order 只在新建时写一次，界面上没有任何地方能改到它，
+ * 常用的分类永远调不到顺手的位置。
+ */
+export async function moveCategory(id, delta) {
+  const cat = categoryById(id);
+  if (!cat) return false;
+  const list = categoriesOf(cat.kind);
+  const from = list.findIndex((c) => c.id === id);
+  const to = from + delta;
+  if (from < 0 || to < 0 || to >= list.length) return false;
+
+  // 整体重排后回写，避免出现重复的 order
+  list.splice(to, 0, list.splice(from, 1)[0]);
+  await Promise.all(
+    list.map((c, idx) => {
+      c.order = idx;
+      return db.put('categories', c);
+    })
+  );
+  return true;
 }
 
 export async function updateCategory(id, patch) {
@@ -222,17 +248,31 @@ export async function updateTransaction(id, patch) {
 }
 
 export async function deleteTransaction(id) {
+  const gone = state.transactions.find((t) => t.id === id) || null;
   state.transactions = state.transactions.filter((t) => t.id !== id);
   await db.remove('transactions', id);
+  return gone;
+}
+
+/** 撤销删除：把原来那条原样塞回去 */
+export async function restoreTransaction(record) {
+  if (!record) return;
+  if (state.transactions.some((t) => t.id === record.id)) return;
+  state.transactions.push(record);
+  await db.put('transactions', record);
 }
 
 /* ---------------- 查询与统计 ---------------- */
 
-/** 某账本某月的记录，按日期倒序、同日按录入时间倒序 */
-export function monthTransactions(month, ledgerId = state.meta.currentLedgerId, { categoryId = '', keyword = '' } = {}) {
+/**
+ * 某账本的记录，按日期倒序、同日按录入时间倒序。
+ * scope='all' 时不再限制月份 —— 以前搜关键字只在当月里找，
+ * 想翻「三个月前那笔买空调的钱」得一个月一个月翻过去。
+ */
+export function monthTransactions(month, ledgerId = state.meta.currentLedgerId, { categoryId = '', keyword = '', scope = 'month' } = {}) {
   const kw = keyword.trim().toLowerCase();
   return transactionsOfLedger(ledgerId)
-    .filter((t) => monthOf(t.date) === month)
+    .filter((t) => scope === 'all' || monthOf(t.date) === month)
     .filter((t) => !categoryId || t.categoryId === categoryId)
     .filter((t) => {
       if (!kw) return true;

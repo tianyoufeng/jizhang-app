@@ -16,6 +16,7 @@ export function renderStats(root) {
   const months = lastMonths(view.month, 6);
   const trend = monthlyTrend(months, ledger.id);
   const summary = monthSummary(view.month, ledger.id);
+  const prev = monthSummary(shiftMonth(view.month, -1), ledger.id);
   const breakdown = categoryBreakdown(view.month, view.kind, ledger.id);
   const atLatest = view.month >= currentMonth();
 
@@ -28,11 +29,12 @@ export function renderStats(root) {
 
     <div class="card">
       <p class="card-title">${escapeHtml(monthLabel(view.month))}总结</p>
-      <div class="summary" style="box-shadow:none;padding:0;margin:0">
+      <div class="summary summary-plain">
         <div><div class="s-val income">${escapeHtml(money(summary.incomeFen))}</div><div class="s-key">收入</div></div>
         <div><div class="s-val expense">${escapeHtml(money(summary.expenseFen))}</div><div class="s-key">支出</div></div>
         <div><div class="s-val balance">${escapeHtml(money(summary.balanceFen))}</div><div class="s-key">结余</div></div>
       </div>
+      ${deltaLine(summary, prev)}
       ${summary.count ? '' : '<div class="muted" style="margin-top:10px">这个月还没有记录</div>'}
     </div>
 
@@ -82,6 +84,25 @@ export function renderStats(root) {
       navigate('list');
     });
   });
+}
+
+/**
+ * 环比：这个月比上个月多花 / 少花多少。
+ * 单月数字和 6 个月趋势都有，但「比上月多花多少」这句最想知道的话原来没有。
+ */
+function deltaLine(summary, prev) {
+  if (!summary.count) return '';
+  if (!prev.count) return '<div class="delta">上月没有记录，没法比</div>';
+
+  const diff = summary.expenseFen - prev.expenseFen;
+  if (diff === 0) return '<div class="delta">支出和上月持平</div>';
+
+  const pct = Math.round(Math.abs(diff / prev.expenseFen) * 100);
+  const more = diff > 0;
+  return `<div class="delta ${more ? 'up' : 'down'}">
+    支出比上月${more ? '多' : '少'}花 <b>${escapeHtml(money(Math.abs(diff)))}</b> 元
+    <b>(${more ? '+' : '-'}${pct}%)</b>
+  </div>`;
 }
 
 /** 以 month 结尾、往前数 n 个月 */

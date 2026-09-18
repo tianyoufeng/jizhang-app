@@ -11,6 +11,8 @@
   --expense: #e0575b;
   --income: #26a06a;
   --warn: #e0a32e;
+  --warn-soft: #fdf4e2;
+  --warn-text: #8a5a12;
   --danger: #d64545;
   --shadow: 0 1px 2px rgba(20, 30, 50, .06), 0 8px 24px rgba(20, 30, 50, .06);
   --radius: 14px;
@@ -18,6 +20,11 @@
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --topbar-h: 52px;
   --tabbar-h: 58px;
+  /* 统一的垂直间距刻度。原来 12/14/18 三套混用，页面之间松紧不一致 */
+  --gap-1: 8px;
+  --gap-2: 12px;
+  --gap-3: 16px;
+  --gap-4: 24px;
 }
 
 html[data-theme="dark"] {
@@ -33,6 +40,8 @@ html[data-theme="dark"] {
   --expense: #ef6a6e;
   --income: #3fbb82;
   --warn: #e0b355;
+  --warn-soft: #3a3018;
+  --warn-text: #e8c37a;
   --danger: #e2685f;
   --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 8px 24px rgba(0, 0, 0, .25);
 }
@@ -65,7 +74,11 @@ body { -webkit-font-smoothing: antialiased; }
   top: 0; left: 0; right: 0;
   height: calc(var(--topbar-h) + var(--safe-top));
   padding: var(--safe-top) 8px 0;
-  display: flex;
+  /* 左右两列用 1fr 平均分，标题才是屏幕正中。
+     原来是 flex + h1{flex:1}，左侧账本按钮宽、右侧图标窄，
+     标题只在「剩余空间」里居中，实际偏右约 26px */
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
   gap: 8px;
   background: var(--surface);
@@ -73,13 +86,18 @@ body { -webkit-font-smoothing: antialiased; }
   z-index: 30;
 }
 
+#ledgerSwitch { justify-self: start; }
+#themeToggle { justify-self: end; }
+
 #topbar h1 {
-  flex: 1;
   margin: 0;
   font-size: 16px;
   font-weight: 600;
   text-align: center;
   letter-spacing: .2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .ledger-btn {
@@ -102,12 +120,20 @@ body { -webkit-font-smoothing: antialiased; }
 
 .icon-btn {
   width: 40px; height: 40px;
-  display: grid; place-items: center;
+  display: flex; align-items: center; justify-content: center;
   border: none; border-radius: 10px;
   background: transparent;
-  font-size: 18px;
+  color: var(--text-2);
   cursor: pointer;
 }
+.icon-btn:active { background: var(--surface-2); }
+
+/* 主题图标用 CSS 跟着 data-theme 切换，不再靠 JS 改文字；
+   同时换掉了各厂 ROM 长相不一的 emoji */
+#themeToggle svg { display: none; }
+#themeToggle .ico-moon { display: block; }
+html[data-theme="dark"] #themeToggle .ico-moon { display: none; }
+html[data-theme="dark"] #themeToggle .ico-sun { display: block; }
 
 /* ---------- 主区域 ---------- */
 #view {
@@ -133,18 +159,29 @@ body { -webkit-font-smoothing: antialiased; }
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 2px;
+  gap: 3px;
   border: none;
   background: none;
   color: var(--text-3);
   font-family: inherit;
-  font-size: 11px;
+  font-size: 12px;
   cursor: pointer;
   transition: color .15s;
 }
-.tab .tab-ico { font-size: 19px; line-height: 1; filter: grayscale(1) opacity(.55); transition: filter .15s; }
+/* 线性图标用 currentColor，跟着 .tab 的 color 走。
+   原来用系统 emoji：各厂 ROM 渲染不一样，而且没法跟随主题色，
+   选中时只有文字变蓝、图标仍是原色，选中态是割裂的 */
+.tab .tab-ico {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
 .tab.active { color: var(--primary); font-weight: 600; }
-.tab.active .tab-ico { filter: none; }
+.tab:active { opacity: .65; }
 
 /* ---------- 通用卡片 ---------- */
 .card {
@@ -152,7 +189,7 @@ body { -webkit-font-smoothing: antialiased; }
   border-radius: var(--radius);
   box-shadow: var(--shadow);
   padding: 14px;
-  margin-bottom: 12px;
+  margin-bottom: var(--gap-2);
 }
 .card-title {
   font-size: 13px;
@@ -169,7 +206,7 @@ body { -webkit-font-smoothing: antialiased; }
   padding: 4px;
   background: var(--surface-2);
   border-radius: 12px;
-  margin-bottom: 14px;
+  margin-bottom: var(--gap-3);
 }
 .seg button {
   border: none;
@@ -192,7 +229,7 @@ body { -webkit-font-smoothing: antialiased; }
   border-radius: var(--radius);
   box-shadow: var(--shadow);
   padding: 16px;
-  margin-bottom: 12px;
+  margin-bottom: var(--gap-2);
 }
 .amount-label { font-size: 12px; color: var(--text-3); margin-bottom: 6px; }
 .amount-row { display: flex; align-items: baseline; gap: 8px; }
@@ -209,14 +246,17 @@ body { -webkit-font-smoothing: antialiased; }
   letter-spacing: -.5px;
   padding: 0;
   outline: none;
+  font-variant-numeric: tabular-nums;
 }
 #amountInput::placeholder { color: var(--text-3); font-weight: 500; }
 .amount-hint { font-size: 12px; color: var(--text-3); margin-top: 6px; min-height: 18px; }
 .amount-hint.error { color: var(--danger); }
 
+/* 自适应列宽。固定 5 列时，360px 屏每格只有 63px，
+   用户被允许取 6 个字的分类名会被省略号截掉 */
 .cat-grid {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(auto-fill, minmax(64px, 1fr));
   gap: 6px;
 }
 .cat-item {
@@ -230,7 +270,7 @@ body { -webkit-font-smoothing: antialiased; }
   background: var(--surface-2);
   color: var(--text-2);
   font-family: inherit;
-  font-size: 11px;
+  font-size: 12px;
   cursor: pointer;
   transition: all .12s;
 }
@@ -246,6 +286,8 @@ body { -webkit-font-smoothing: antialiased; }
 .field-grid { display: grid; gap: 10px; }
 .field { display: flex; align-items: center; gap: 10px; }
 .field-label { flex: none; width: 56px; font-size: 13px; color: var(--text-2); }
+/* 输入框字号必须 ≥16px：iOS Safari / WKWebView 在聚焦字号小于 16px 的
+   输入框时会自动放大整个页面，而且不会缩回来 */
 .field input, .field select, .field textarea {
   flex: 1;
   min-width: 0;
@@ -255,10 +297,27 @@ body { -webkit-font-smoothing: antialiased; }
   background: var(--surface-2);
   color: var(--text);
   font-family: inherit;
-  font-size: 15px;
+  font-size: 16px;
   outline: none;
+  -webkit-appearance: none;
+  appearance: none;
 }
+.field input[type="date"] { min-height: 44px; line-height: 1.2; }
 .field input:focus, .field select:focus, .field textarea:focus { border-color: var(--primary); }
+
+/* 日期快捷选择：补记前几天的账不用去点日历 */
+.quick-dates { display: flex; gap: 6px; margin-left: 66px; }
+.chip {
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  padding: 6px 13px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.chip.active { border-color: var(--primary); background: var(--primary-soft); color: var(--primary); font-weight: 600; }
 
 /* ---------- 按钮 ---------- */
 .btn {
@@ -317,16 +376,19 @@ body { -webkit-font-smoothing: antialiased; }
   border-radius: var(--radius);
   box-shadow: var(--shadow);
   padding: 14px 10px;
-  margin-bottom: 12px;
+  margin-bottom: var(--gap-2);
   text-align: center;
 }
-.summary .s-val { font-size: 17px; font-weight: 700; letter-spacing: -.3px; }
-.summary .s-key { font-size: 11px; color: var(--text-3); margin-top: 2px; }
+/* 数字加等宽对齐：不加的话翻月份时数字宽度变化，三列会左右抖动 */
+.summary .s-val { font-size: 17px; font-weight: 700; letter-spacing: -.3px; font-variant-numeric: tabular-nums; }
+.summary .s-key { font-size: 12px; color: var(--text-3); margin-top: 2px; }
+/* 嵌在 .card 里时不要再套一层卡片样式（原来靠内联 style 覆盖） */
+.summary-plain { box-shadow: none; padding: 0; margin: 0; }
 .s-val.expense { color: var(--expense); }
 .s-val.income { color: var(--income); }
 .s-val.balance { color: var(--primary); }
 
-.filters { display: flex; gap: 8px; margin-bottom: 12px; }
+.filters { display: flex; gap: 8px; margin-bottom: var(--gap-2); }
 .filters input, .filters select {
   flex: 1;
   min-width: 0;
@@ -336,11 +398,45 @@ body { -webkit-font-smoothing: antialiased; }
   background: var(--surface);
   color: var(--text);
   font-family: inherit;
-  font-size: 14px;
+  font-size: 16px;
   outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.filters select {
+  flex: none;
+  width: 44%;
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: calc(100% - 17px) calc(50% + 1px), calc(100% - 12px) calc(50% + 1px);
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  padding-right: 30px;
 }
 
-.day-group { margin-bottom: 14px; }
+/* 「本月 / 全部时间」切换 */
+.scope {
+  display: inline-grid;
+  grid-auto-flow: column;
+  gap: 3px;
+  padding: 3px;
+  margin-bottom: var(--gap-2);
+  background: var(--surface-2);
+  border-radius: 10px;
+}
+.scope button {
+  border: none;
+  border-radius: 8px;
+  padding: 6px 12px;
+  background: transparent;
+  color: var(--text-2);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.scope button.active { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
+
+.day-group { margin-bottom: var(--gap-2); }
 .day-head {
   display: flex;
   justify-content: space-between;
@@ -385,14 +481,26 @@ body { -webkit-font-smoothing: antialiased; }
 .empty .empty-ico { font-size: 42px; display: block; margin-bottom: 10px; opacity: .7; }
 
 /* ---------- 统计页 ---------- */
-.chart-wrap { width: 100%; }
+/* 上限 360px：SVG 内部的文字会跟着 viewBox 一起缩放，容器越宽字越大。
+   设了上限，缩放比就不会失控（原来趋势图被缩到 ~0.89、饼图被放大到 ~1.52） */
+.chart-wrap { width: 100%; max-width: 360px; margin: 0 auto; }
 .chart-wrap svg { display: block; width: 100%; height: auto; }
 .legend { display: grid; gap: 8px; margin-top: 12px; }
 .legend-row { display: flex; align-items: center; gap: 9px; font-size: 13px; }
+/* 趋势图图例是一组「色块 + 名字」对。以前四个元素塞进同一个 .legend-row，
+   而 .legend-name{flex:1} 会把「收入」撑满，把「支出」推到最右边 */
+.legend-group { display: flex; align-items: center; gap: 16px; font-size: 13px; }
+.legend-item { display: flex; align-items: center; gap: 6px; }
 .legend-dot { width: 10px; height: 10px; border-radius: 3px; flex: none; }
 .legend-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .legend-amt { font-variant-numeric: tabular-nums; color: var(--text-2); }
-.legend-pct { width: 46px; text-align: right; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.legend-pct { width: 46px; text-align: right; color: var(--text-3); font-variant-numeric: tabular-nums; font-size: 12px; }
+
+/* 环比：比上月多花 / 少花 */
+.delta { font-size: 12px; margin-top: 10px; color: var(--text-2); }
+.delta b { font-variant-numeric: tabular-nums; font-weight: 600; }
+.delta.up { color: var(--expense); }
+.delta.down { color: var(--income); }
 
 .progress {
   height: 10px;
@@ -461,6 +569,8 @@ body { -webkit-font-smoothing: antialiased; }
   width: 100%;
   max-height: 86vh;
   overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
   background: var(--surface);
   border-radius: 20px 20px 0 0;
   padding: 16px 16px calc(16px + var(--safe-bottom));
@@ -524,25 +634,63 @@ body { -webkit-font-smoothing: antialiased; }
   font-size: 14px;
   box-shadow: 0 6px 20px rgba(0, 0, 0, .25);
   animation: toastIn .2s ease;
+  /* toastRoot 整体是 pointer-events:none，这里也必须保持穿透 ——
+     提示条浮在底部导航上方，正好压着「保存这笔」按钮，
+     一旦接收点击，刚记完一笔就会点不动下一笔的保存 */
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.toast-action {
+  flex: none;
+  border: none;
+  background: none;
+  padding: 0;
+  color: #8fbaff;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  /* 只有这个按钮需要可点 */
+  pointer-events: auto;
 }
 html[data-theme="dark"] .toast { background: rgba(238, 240, 245, .95); color: #14161c; }
+html[data-theme="dark"] .toast-action { color: #1b5fb8; }
 @keyframes toastIn { from { opacity: 0; transform: translateY(10px) } to { opacity: 1; transform: none } }
 
 /* ---------- 杂项 ---------- */
-.cat-manage-row {
+/* ---------- 分类管理：一行 = 可点的主体 + 上移/下移 ---------- */
+.cat-row {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 0;
+  gap: 8px;
+  padding: 4px 12px 4px 0;
   border-bottom: 1px solid var(--border);
 }
-.cat-manage-row:last-child { border-bottom: none; }
-.cat-manage-row .cm-emoji { font-size: 20px; }
-.cat-manage-row .cm-name { flex: 1; }
-.cat-manage-row .cm-count { font-size: 12px; color: var(--text-3); }
-
-.swatch-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; }
-.swatch-grid .cat-item { font-size: 20px; }
+.cat-row:last-child { border-bottom: none; }
+.cat-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0 10px 14px;
+  border: none;
+  border-radius: 10px;
+  background: none;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 15px;
+  text-align: left;
+  cursor: pointer;
+}
+.cat-row-main:active { background: var(--surface-2); }
+.cat-row .cm-emoji { font-size: 19px; flex: none; width: 24px; text-align: center; }
+.cat-row .cm-body { flex: 1; min-width: 0; }
+.cat-row .cm-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cat-row .cm-sub { font-size: 12px; color: var(--text-3); margin-top: 1px; }
+.cat-row .cm-tools { display: flex; gap: 6px; flex: none; }
 
 .emoji-grid {
   display: grid;
@@ -550,10 +698,29 @@ html[data-theme="dark"] .toast { background: rgba(238, 240, 245, .95); color: #1
   gap: 4px;
   max-height: 200px;
   overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
   padding: 4px;
   background: var(--surface-2);
   border-radius: 12px;
 }
+
+/* 分类排序用的小按钮 */
+.mini-btn {
+  flex: none;
+  width: 34px; height: 34px;
+  display: grid; place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+.mini-btn:active { background: var(--border); }
+.mini-btn:disabled { opacity: .3; cursor: not-allowed; }
 .emoji-grid button {
   aspect-ratio: 1;
   border: 1.5px solid transparent;
@@ -567,3 +734,32 @@ html[data-theme="dark"] .toast { background: rgba(238, 240, 245, .95); color: #1
 .divider { height: 1px; background: var(--border); margin: 14px 0; }
 .muted { color: var(--text-3); font-size: 12px; line-height: 1.6; }
 .mono { font-variant-numeric: tabular-nums; }
+
+/* 备份提醒条：数据只在本机，且系统云备份是关的，久不备份风险很高 */
+.reminder {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  margin-bottom: var(--gap-2);
+  border-radius: var(--radius);
+  background: var(--warn-soft);
+  color: var(--warn-text);
+  font-size: 13px;
+  line-height: 1.55;
+}
+.reminder .rem-main { flex: 1; min-width: 0; }
+.reminder .rem-close {
+  flex: none;
+  width: 26px; height: 26px;
+  display: grid; place-items: center;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: .7;
+}

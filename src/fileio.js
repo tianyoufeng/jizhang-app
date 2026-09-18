@@ -7,8 +7,8 @@ function isNative() {
 
 /**
  * 把一个文本文件交给用户。
- * 安卓：先写到 App 的缓存目录，再调起系统分享面板（微信/邮件/保存到文件 都行）
- * 电脑浏览器：直接触发下载（文件会进「下载」文件夹）
+ * 安卓 / iOS：先写到 App 的缓存目录，再调起系统分享面板（微信 / 邮件 / 存到「文件」都行）
+ * 电脑浏览器 / iPhone 上的 PWA：直接触发下载
  */
 export async function saveTextFile(filename, text, mimeType = 'text/plain') {
   if (isNative()) {
@@ -18,13 +18,19 @@ export async function saveTextFile(filename, text, mimeType = 'text/plain') {
       directory: Directory.Cache,
       encoding: Encoding.UTF8
     });
-    await Share.share({
-      title: filename,
-      text: filename,
-      url: written.uri,
-      dialogTitle: '保存或发送这个文件'
-    });
-    return { mode: 'share' };
+    try {
+      await Share.share({
+        title: filename,
+        text: filename,
+        url: written.uri,
+        dialogTitle: '保存或发送这个文件'
+      });
+      return { mode: 'share' };
+    } catch (err) {
+      // 分享面板被系统拦掉（比如 iOS 上找不到能处理这种文件类型的 App）时，
+      // 至少把文件留在缓存目录并告诉用户路径，不要让整个导出无声失败
+      return { mode: 'share-failed', uri: written.uri, message: err?.message || '' };
+    }
   }
 
   const blob = new Blob([text], { type: `${mimeType};charset=utf-8` });

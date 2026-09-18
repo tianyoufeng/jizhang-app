@@ -1,6 +1,6 @@
 import {
   state, monthTransactions, categoryById, categoriesOf,
-  deleteTransaction, currentLedger, earliestMonth, addTransaction
+  deleteTransaction, restoreTransaction, currentLedger, earliestMonth, addTransaction
 } from '../store.js';
 import { money, today, currentMonth, shiftMonth, monthLabel, dateLabel, escapeHtml, sum, totals } from '../utils.js';
 import { openSheet, confirmDialog, toast } from '../ui.js';
@@ -9,13 +9,16 @@ import { mountTxForm } from './txForm.js';
 const view = {
   month: currentMonth(),
   categoryId: '',
-  keyword: ''
+  keyword: '',
+  // 'month' 只看当月，'all' 跨全部时间 —— 搜旧记录不用一个月一个月翻
+  scope: 'month'
 };
 
 export function resetListView() {
   view.month = currentMonth();
   view.categoryId = '';
   view.keyword = '';
+  view.scope = 'month';
 }
 
 export function renderList(root) {
@@ -24,9 +27,11 @@ export function renderList(root) {
   const ledger = currentLedger();
   const list = monthTransactions(view.month, ledger.id, {
     categoryId: view.categoryId,
-    keyword: view.keyword
+    keyword: view.keyword,
+    scope: view.scope
   });
   const filtering = Boolean(view.categoryId || view.keyword.trim());
+  const allTime = view.scope === 'all';
   // 筛选时合计跟着筛选结果走，免得看了只有餐饮的列表却对上全月的支出
   const summary = totals(list);
 
@@ -34,17 +39,24 @@ export function renderList(root) {
   const atLatest = view.month >= currentMonth();
 
   root.innerHTML = `
-    <div class="month-nav">
+    <div class="scope" data-role="scope">
+      <button type="button" data-scope="month" class="${allTime ? '' : 'active'}">按月</button>
+      <button type="button" data-scope="all" class="${allTime ? 'active' : ''}">全部时间</button>
+    </div>
+
+    ${allTime ? '' : `<div class="month-nav">
       <button type="button" class="m-arrow" data-role="prev" ${atEarliest ? 'disabled' : ''}>‹</button>
       <span class="m-label">${escapeHtml(monthLabel(view.month))}${filtering ? ` · 筛选出 ${list.length} 笔` : ''}</span>
       <button type="button" class="m-arrow" data-role="next" ${atLatest ? 'disabled' : ''}>›</button>
-    </div>
+    </div>`}
 
     <div class="summary">
       <div><div class="s-val income">${escapeHtml(money(summary.incomeFen))}</div><div class="s-key">收入</div></div>
       <div><div class="s-val expense">${escapeHtml(money(summary.expenseFen))}</div><div class="s-key">支出</div></div>
       <div><div class="s-val balance">${escapeHtml(money(summary.balanceFen))}</div><div class="s-key">结余</div></div>
     </div>
+
+    ${allTime ? `<p class="muted" style="margin:-4px 0 12px 2px">全部时间里${filtering ? '筛选出' : '共'} ${list.length} 笔</p>` : ''}
 
     <div class="filters">
       <select data-role="cat">
@@ -59,16 +71,26 @@ export function renderList(root) {
   `;
 
   const listEl = root.querySelector('[data-role="list"]');
-  listEl.innerHTML = list.length ? groupByDay(list) : emptyState(filtering);
+  listEl.innerHTML = list.length ? groupByDay(list, allTime) : emptyState(filtering, allTime);
 
-  root.querySelector('[data-role="prev"]').addEventListener('click', () => {
-    view.month = shiftMonth(view.month, -1);
+  root.querySelector('[data-role="scope"]').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-scope]');
+    if (!btn || btn.dataset.scope === view.scope) return;
+    view.scope = btn.dataset.scope;
     renderList(root);
   });
-  root.querySelector('[data-role="next"]').addEventListener('click', () => {
-    view.month = shiftMonth(view.month, 1);
-    renderList(root);
-  });
+
+  const prevBtn = root.querySelector('[data-role="prev"]');
+  if (prevBtn) {
+    prevBtn.addEventListener('click', () => {
+      view.month = shiftMonth(view.month, -1);
+      renderList(root);
+    });
+    root.querySelector('[data-role="next"]').addEventListener('click', () => {
+      view.month = shiftMonth(view.month, 1);
+      renderList(root);
+    });
+  }
 
   root.querySelector('[data-role="cat"]').addEventListener('change', (e) => {
     view.categoryId = e.target.value;
@@ -97,12 +119,14 @@ export function renderList(root) {
   });
 }
 
-function groupByDay(list) {
+function groupByDay(list, allTime) {
   const days = new Map();
   for (const t of list) {
     if (!days.has(t.date)) days.set(t.date, []);
     days.get(t.date).push(t);
   }
+
+  const thisYear = String(new Date().getFullYear());
 
   return [...days.entries()]
     .map(([date, items]) => {
@@ -112,9 +136,13 @@ function groupByDay(list) {
       if (incomeFen) parts.push(`收 ${money(incomeFen)}`);
       if (expenseFen) parts.push(`支 ${money(expenseFen)}`);
 
+      // 跨年看的时候不写年份会分不清是哪一年
+      const y = date.slice(0, 4);
+      const label = allTime && y !== thisYear ? `${y}年${dateLabel(date)}` : dateLabel(date);
+
       return `<div class="day-group">
         <div class="day-head">
-          <span>${escapeHtml(dateLabel(date))}</span>
+          <span>${escapeHtml(label)}</span>
           <span class="d-sub">${escapeHtml(parts.join('　'))}</span>
         </div>
         <div class="tx-list">
@@ -137,10 +165,11 @@ function groupByDay(list) {
     .join('');
 }
 
-function emptyState(filtering) {
+function emptyState(filtering, allTime) {
+  const title = filtering ? '没有符合条件的记录' : allTime ? '还没有任何记录' : '这个月还没有记账';
   return `<div class="empty">
     <span class="empty-ico">${filtering ? '🔍' : '🗒️'}</span>
-    ${filtering ? '没有符合条件的记录' : '这个月还没有记账'}
+    ${title}
   </div>`;
 }
 
@@ -180,14 +209,23 @@ function openTxActions(txId, root) {
     if (act === 'del') {
       const ok = await confirmDialog({
         title: '删除这笔记录？',
-        message: `${tx.date}　${cat?.name ?? '未分类'}　${money(tx.amountFen)} 元\n删掉之后没法恢复。`,
+        message: `${tx.date}　${cat?.name ?? '未分类'}　${money(tx.amountFen)} 元\n删掉之后可以马上点提示里的「撤销」找回。`,
         okText: '删除',
         danger: true
       });
       if (!ok) return;
-      await deleteTransaction(tx.id);
-      toast('已删除');
+      const gone = await deleteTransaction(tx.id);
       renderList(root);
+      // 撤销窗口开 6 秒，误删不用重记
+      toast('已删除 1 笔记录', {
+        ms: 6000,
+        actionLabel: '撤销',
+        onAction: async () => {
+          await restoreTransaction(gone);
+          toast('已恢复');
+          renderList(root);
+        }
+      });
       return;
     }
 
@@ -207,7 +245,7 @@ async function copyToToday(tx, root) {
     note: tx.note
   });
   toast('已复制到今天');
-  if (view.month !== currentMonth()) view.month = currentMonth();
+  if (view.scope !== 'all' && view.month !== currentMonth()) view.month = currentMonth();
   renderList(root);
 }
 
@@ -231,6 +269,8 @@ function openEditor(tx, root) {
 export function setListFilter({ month, categoryId } = {}) {
   if (month) view.month = month;
   if (categoryId !== undefined) view.categoryId = categoryId;
+  // 点统计页图例进来的是「某个月的某个分类」，留在按月视图更符合预期
+  if (month) view.scope = 'month';
 }
 
 export { view as listView };

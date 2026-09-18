@@ -1,17 +1,18 @@
 import {
   state, initStore, currentLedger, switchLedger, addLedger, updateLedger, deleteLedger,
-  categoriesOf, addCategory, updateCategory, deleteCategory, categoryUsage,
-  exportPayload, importPayload, toCsv, monthSummary
+  categoriesOf, addCategory, updateCategory, moveCategory, deleteCategory, categoryUsage,
+  exportPayload, importPayload, toCsv, monthSummary, setMeta
 } from '../store.js';
 import { db } from '../db.js';
-import { money, yuanToFen, fenToYuan, currentMonth, escapeHtml } from '../utils.js';
+import { money, yuanToFen, fenToYuan, currentMonth, daysBetween, toDateStr, escapeHtml } from '../utils.js';
 import { openSheet, confirmDialog, alertDialog, toast } from '../ui.js';
 import { saveTextFile, readTextFile, stamp } from '../fileio.js';
 
+// 图标一律挑 Unicode 9.0（2016）以前就有的，旧安卓的 emoji 字体才画得出来
 const EMOJI_CHOICES = [
   '🍚','🍜','🍔','🍰','☕','🍺','🚌','🚇','🚕','⛽','🛒','👕','💄','🏠','💡','📱','🎮','🎬','✈️','🏨',
-  '💊','🏥','📚','✏️','🎓','🎁','🧧','💰','💼','📈','🐱','👶','🔧','🚿','🧻','🏋️','🎵','📷','🌸','📦',
-  '💳','🏦','🪙','🎯','🧾','🩺','🍎','🚗','🛵','🎨'
+  '💊','🏥','📚','✏️','🎓','🎁','💵','💰','💼','📈','🐱','👶','🔧','🚿','🛁','🏋️','🎵','📷','🌸','📦',
+  '💳','🏦','💎','🎯','📄','💉','🍎','🚗','🛵','🎨'
 ];
 
 export function renderSettings(root) {
@@ -23,6 +24,7 @@ export function renderSettings(root) {
   const ledger = currentLedger();
   const summary = monthSummary(currentMonth(), ledger.id);
   const budget = ledger.budgetFen || 0;
+  const lastBackup = state.meta.lastBackupAt || 0;
 
   page.innerHTML = `
     <div class="set-group">
@@ -57,7 +59,7 @@ export function renderSettings(root) {
       <div class="set-list">
         <button type="button" class="set-row" data-act="cats">
           <span class="sr-ico">🏷️</span>
-          <span class="sr-main">分类管理<span class="sr-sub">新增、改名、换图标、删除</span></span>
+          <span class="sr-main">分类管理<span class="sr-sub">新增、改名、换图标、调顺序、删除</span></span>
           <span class="sr-val">${state.categories.length} 个</span>
           <span class="sr-arrow">›</span>
         </button>
@@ -75,6 +77,7 @@ export function renderSettings(root) {
         <button type="button" class="set-row" data-act="backup">
           <span class="sr-ico">💾</span>
           <span class="sr-main">导出完整备份<span class="sr-sub">所有账本、分类、预算，一个文件全带走</span></span>
+          <span class="sr-val">${escapeHtml(backupHint(lastBackup))}</span>
           <span class="sr-arrow">›</span>
         </button>
         <button type="button" class="set-row" data-act="restore">
@@ -83,7 +86,7 @@ export function renderSettings(root) {
           <span class="sr-arrow">›</span>
         </button>
         <button type="button" class="set-row" data-act="wipe">
-          <span class="sr-ico">🧹</span>
+          <span class="sr-ico">🗑️</span>
           <span class="sr-main" style="color:var(--danger)">清空所有数据</span>
           <span class="sr-arrow">›</span>
         </button>
@@ -116,10 +119,19 @@ export function renderSettings(root) {
     if (act === 'newledger') return openNewLedger(root);
     if (act === 'cats') return openCategoryManager(root);
     if (act === 'csv') return doExportCsv();
-    if (act === 'backup') return doExportBackup();
+    if (act === 'backup') return doExportBackup(rerender);
     if (act === 'restore') return doRestore(rerender);
     if (act === 'wipe') return doWipe(rerender);
   });
+}
+
+/** 「导出完整备份」这一行右边显示上次备份是多久以前 */
+function backupHint(lastBackup) {
+  if (!lastBackup) return '还没有备份';
+  const days = daysBetween(toDateStr(new Date(lastBackup)), toDateStr(new Date()));
+  if (days <= 0) return '今天刚备份';
+  if (days === 1) return '昨天备份';
+  return `${days} 天前备份`;
 }
 
 /* ---------------- 账本 ---------------- */
@@ -285,8 +297,6 @@ function openBudgetEditor(root) {
 /* ---------------- 分类管理 ---------------- */
 
 function openCategoryManager(root, kind = 'expense') {
-  const list = categoriesOf(kind);
-
   const handle = openSheet({
     title: '分类管理',
     body: `
@@ -296,7 +306,7 @@ function openCategoryManager(root, kind = 'expense') {
       </div>
       <div data-role="list"></div>
       <button type="button" class="btn btn-outline btn-block" data-role="add" style="margin-top:14px">➕ 新增分类</button>
-      <p class="muted" style="margin-top:12px">删掉分类不会删掉记录，那些记录会显示成「未分类」。</p>`
+      <p class="muted" style="margin-top:12px">↑↓ 调整分类在记账页的排列顺序。删掉分类不会删掉记录，那些记录会显示成「未分类」。</p>`
   });
 
   function paint() {
@@ -307,18 +317,34 @@ function openCategoryManager(root, kind = 'expense') {
 
     const box = handle.body.querySelector('[data-role="list"]');
     box.innerHTML = `<div class="set-list">${items
-      .map((c) => {
+      .map((c, i) => {
         const used = categoryUsage(c.id);
-        return `<button type="button" class="set-row" data-cat="${c.id}">
-          <span class="sr-ico">${escapeHtml(c.emoji)}</span>
-          <span class="sr-main">${escapeHtml(c.name)}<span class="sr-sub">${used} 笔记录在用</span></span>
-          <span class="sr-arrow">›</span>
-        </button>`;
+        return `<div class="cat-row">
+          <button type="button" class="cat-row-main" data-cat="${c.id}">
+            <span class="cm-emoji">${escapeHtml(c.emoji)}</span>
+            <span class="cm-body">
+              <div class="cm-name">${escapeHtml(c.name)}</div>
+              <div class="cm-sub">${used} 笔记录在用</div>
+            </span>
+          </button>
+          <span class="cm-tools">
+            <button type="button" class="mini-btn" data-up="${c.id}" ${i === 0 ? 'disabled' : ''} aria-label="上移">↑</button>
+            <button type="button" class="mini-btn" data-down="${c.id}" ${i === items.length - 1 ? 'disabled' : ''} aria-label="下移">↓</button>
+          </span>
+        </div>`;
       })
       .join('')}</div>`;
 
     box.querySelectorAll('[data-cat]').forEach((btn) => {
       btn.addEventListener('click', () => openCategoryEditor(state.categories.find((c) => c.id === btn.dataset.cat), () => paint(), root));
+    });
+
+    box.querySelectorAll('[data-up], [data-down]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const delta = btn.dataset.up ? -1 : 1;
+        const id = btn.dataset.up || btn.dataset.down;
+        if (await moveCategory(id, delta)) paint();
+      });
     });
   }
 
@@ -414,6 +440,13 @@ function openCategoryEditor(cat, onDone, root, kind = 'expense') {
 
 /* ---------------- 导出 / 导入 ---------------- */
 
+/** 把 saveTextFile 的返回值翻译成一句人话 */
+function describeSave(res) {
+  if (res.mode === 'download') return '已导出，去「下载」或「文件」里找';
+  if (res.mode === 'share-failed') return '文件已生成，但发送面板没弹出来：' + (res.message || '系统限制');
+  return '已导出，选个地方保存吧';
+}
+
 async function doExportCsv() {
   const ledger = currentLedger();
   const csv = toCsv(ledger.id);
@@ -423,19 +456,22 @@ async function doExportCsv() {
   // 加 BOM，不然 Excel 打开中文会乱码
   const filename = `${ledger.name}-${stamp()}.csv`;
   try {
-    const { mode } = await saveTextFile(filename, '﻿' + csv, 'text/csv');
-    toast(mode === 'download' ? `已导出 ${rows} 条，去「下载」文件夹找 ${filename}` : '已导出，选个地方保存吧');
+    const res = await saveTextFile(filename, '﻿' + csv, 'text/csv');
+    toast(`${res.mode === 'download' ? `已导出 ${rows} 条，` : ''}${describeSave(res)}`);
   } catch (err) {
     toast('导出失败：' + (err.message || '未知原因'));
   }
 }
 
-async function doExportBackup() {
+async function doExportBackup(rerender) {
   if (!state.transactions.length) return toast('还没有数据可以备份');
   const filename = `记账备份-${stamp()}.json`;
   try {
-    const { mode } = await saveTextFile(filename, JSON.stringify(exportPayload(), null, 2), 'application/json');
-    toast(mode === 'download' ? `已导出，去「下载」文件夹找 ${filename}` : '备份已导出，选个地方保存吧');
+    const res = await saveTextFile(filename, JSON.stringify(exportPayload(), null, 2), 'application/json');
+    // 记下备份时间，「记账」页据此判断要不要提醒
+    await setMeta('lastBackupAt', Date.now());
+    toast(describeSave(res));
+    rerender?.();
   } catch (err) {
     toast('导出失败：' + (err.message || '未知原因'));
   }
@@ -468,6 +504,8 @@ async function doRestore(rerender) {
 
   try {
     const count = await importPayload(payload);
+    // 恢复完手里的数据和这份备份一致，等同于刚备份过
+    await setMeta('lastBackupAt', Date.now());
     await alertDialog({ title: '恢复完成', message: `成功导入 ${count} 笔记录。` });
     rerender();
   } catch (err) {

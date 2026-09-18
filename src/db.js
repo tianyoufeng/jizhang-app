@@ -1,6 +1,13 @@
 /**
  * 极简 IndexedDB 封装。
- * 浏览器和安卓 WebView 里行为一致，数据存在 App 自己的目录下。
+ * 浏览器、安卓 WebView、iOS WKWebView 里行为一致，数据存在 App 自己的目录下。
+ *
+ * 关于索引：这里建的 ledgerId / ledger_date 索引目前没有查询在用 ——
+ * 所有查询都走内存里的 state（个人记账数据量小，几千条全载入内存反而更快）。
+ * 之所以留着，是因为删索引要动 DB_VERSION，而版本号一涨，
+ * 用户的旧版 APK 就再也打不开这个库了（IndexedDB 不允许降级打开）。
+ * 索引只在写入时有极小的开销，留着比冒降级不兼容的风险划算。
+ * 以后如果真要做分页查询，它们就能派上用场。
  */
 
 const DB_NAME = 'jizhang';
@@ -59,11 +66,6 @@ export const db = {
     return wrap(s.getAll());
   },
 
-  async get(storeName, key) {
-    const s = await tx(storeName, 'readonly');
-    return wrap(s.get(key));
-  },
-
   async put(storeName, value) {
     const s = await tx(storeName, 'readwrite');
     return wrap(s.put(value));
@@ -97,11 +99,6 @@ export const db = {
       t.oncomplete = () => resolve();
       t.onerror = () => reject(t.error);
     });
-  },
-
-  async clear(storeName) {
-    const s = await tx(storeName, 'readwrite');
-    return wrap(s.clear());
   },
 
   async clearAll() {

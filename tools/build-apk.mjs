@@ -31,17 +31,16 @@ const androidDir = join(process.cwd(), 'android');
 const gradlew = join(androidDir, isWin ? 'gradlew.bat' : 'gradlew');
 
 console.log('开始打包…\n');
-const result = isWin
-  ? spawnSync('cmd.exe', ['/d', '/s', '/c', `"${gradlew}" assembleRelease`], {
-      cwd: androidDir,
-      stdio: 'inherit',
-      env
-    })
-  : spawnSync(gradlew, ['assembleRelease'], {
-      cwd: androidDir,
-      stdio: 'inherit',
-      env
-    });
+// 这里不能用 `cmd.exe /d /s /c "\"路径\" assembleRelease"` 的老写法：
+// Node 会把内嵌的引号转义成 \"，而 cmd 根本不认识反斜杠转义，
+// 于是它把 `\"C:\...\gradlew.bat\"` 整个当成命令名去找，报「不是内部或外部命令」。
+// 交给 shell 去拼命令行就没这问题，顺带两个平台也能合成一份。
+const result = spawnSync(gradlew, ['assembleRelease'], {
+  cwd: androidDir,
+  stdio: 'inherit',
+  env,
+  shell: true
+});
 
 if (result.status !== 0) {
   console.error('\n打包失败，往上翻看看报错。');
