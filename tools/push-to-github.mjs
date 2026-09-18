@@ -221,13 +221,69 @@ const uploadOne = async (sha) => {
   const res = await api(`/repos/${REPO}/git/blobs`, { content: buf.toString('base64'), encoding: 'base64' });
   blobRemote.set(sha, res.sha);
   uploaded += 1;
-  if (uploaded % 20 === 0 || uploaded === needed.size) process.stdout.write(`  已上传 ${uploaded}/${needed.size}\n`);
+  if (uploaded % 20 === 0 || uploaded === pending.length) process.stdout.write(`  已上传 ${uploaded}/${pending.length}\n`);
 };
 
 const shaList = [...needed.keys()];
 const sizeOf = new Map(shaList.map((s) => [s, Number(gitBuf('cat-file', '-s', s).toString().trim())]));
-const bigFiles = shaList.filter((s) => sizeOf.get(s) > BIG);
-const smallFiles = shaList.filter((s) => sizeOf.get(s) <= BIG);
+
+/**
+ * 远程是不是已经有这个内容了。
+ *
+ * blob 按内容寻址，哈希一样内容就一样 —— 所以远程有这个 sha，直接沿用即可，
+ * 不用再传一遍。加这一步是因为以前每推一次都会把**全部** blob 重传一遍
+ * （这次 216 个、约 19 MB，光四个旧安装包就 16 MB），既慢又容易被网关的偶发
+ * 5xx / 连接重置打断：一次失败就要从头再来四分钟。查一次是几十字节的 GET，
+ * 比重传一个 3.8 MB 的安装包便宜太多。
+ *
+ * 404 就是「没有」，正常情况，不算错误，也不能走 api()（那里 4xx 会直接抛）。
+ */
+async function blobExists(sha, attempts = 4) {
+  for (let n = 0; ; n += 1) {
+    try {
+      const res = await fetch(`https://api.github.com/repos/${REPO}/git/blobs/${sha}`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: 'application/vnd.github+json',
+          'X-GitHub-Api-Version': '2022-11-28',
+          'User-Agent': 'push-to-github-script'
+        }
+      });
+      if (res.status === 200) return true;
+      if (res.status === 404) return false;
+      if (res.status >= 500 && n + 1 < attempts) {
+        await sleep(backoff(n));
+        continue;
+      }
+      throw new Error(`GET git/blobs/${sha.slice(0, 8)} → ${res.status}`);
+    } catch (err) {
+      if (String(err.message).startsWith('GET git/blobs/')) throw err;
+      if (n + 1 >= attempts) throw err;
+      await sleep(backoff(n));
+    }
+  }
+}
+
+const pending = [];
+let reused = 0;
+for (let i = 0; i < shaList.length; i += 8) {
+  const batch = shaList.slice(i, i + 8);
+  const flags = await Promise.all(batch.map((s) => blobExists(s)));
+  batch.forEach((s, k) => {
+    if (flags[k]) {
+      blobRemote.set(s, s); // 内容一样，远程那份的 sha 就是它自己
+      reused += 1;
+    } else {
+      pending.push(s);
+    }
+  });
+  process.stdout.write(`\r  检查远程已有内容 ${Math.min(i + 8, shaList.length)}/${shaList.length}`);
+}
+process.stdout.write('\n');
+console.log(`远程已有 ${reused} 个，本次只需上传 ${pending.length} 个\n`);
+
+const bigFiles = pending.filter((s) => sizeOf.get(s) > BIG);
+const smallFiles = pending.filter((s) => sizeOf.get(s) <= BIG);
 
 if (bigFiles.length) {
   console.log(`大文件 ${bigFiles.length} 个（>1MB），改成逐个上传：`);
