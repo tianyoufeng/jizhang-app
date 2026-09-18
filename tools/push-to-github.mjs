@@ -21,7 +21,8 @@
  * 前提：gh 已登录（脚本直接问 gh 要 token）。
  */
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
 
 const BRANCH = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).trim();
 
@@ -273,9 +274,28 @@ try {
   await api(`/repos/${REPO}/git/refs/heads/${BRANCH}`, { sha: head, force: true }, 'PATCH');
 }
 
+/**
+ * 直接写一个「松散引用」文件（.git/refs/... 下的普通文件）。
+ *
+ * 这台机器上 `git update-ref` 会出现「退出码 0、但引用根本没变」的情况：
+ * 引用只存在于 .git/packed-refs，松散文件没被建出来，回读还是旧值。
+ * 所以对不上时用这个兜底 —— 松散引用本来就是这么存的。
+ */
+function writeLooseRef(ref, sha) {
+  const file = path.join('.git', ...ref.split('/'));
+  mkdirSync(path.dirname(file), { recursive: true });
+  writeFileSync(file, sha + '\n');
+}
+
 /* 顺手把本地的 origin 记录也对齐，这样 git status 不会显示「分叉」 */
 try {
-  execFileSync('git', ['update-ref', `refs/remotes/origin/${BRANCH}`, head]);
+  const ref = `refs/remotes/origin/${BRANCH}`;
+  execFileSync('git', ['update-ref', ref, head]);
+  const now = execFileSync('git', ['rev-parse', ref], { encoding: 'utf8' }).trim();
+  if (now !== head) {
+    writeLooseRef(ref, head);
+    console.log('（git update-ref 没真正生效，已直接写松散引用文件兜底）');
+  }
   console.log(`本地 origin/${BRANCH} 已指向 ${head.slice(0, 7)}`);
 } catch (e) {
   console.log(`（本地 origin/${BRANCH} 没对齐成功：${e.message.split('\n')[0]}）`);
