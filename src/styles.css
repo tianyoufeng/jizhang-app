@@ -479,12 +479,16 @@ html[data-theme="dark"] #themeToggle .ico-sun {
   padding-right: 30px;
 }
 
-/* 「按周 / 按月 / 按年 / 全部时间」
-   改成等宽四列：原来 inline-grid 是按文字宽度排的，四个按钮宽窄不一看着歪，
-   而且横向上还留着一截空位不好点 */
+/* 「周 / 月 / 年 / 全部时间」
+   等宽分栏：原来 inline-grid 是按文字宽度排的，四个按钮宽窄不一看着歪，
+   而且横向上还留着一截空位不好点。
+   列数跟着按钮数走（账单页 4 个、统计页 3 个），所以用 grid-auto-flow: column
+   而不是写死 repeat(4, 1fr) —— 写死的那种，统计页三个按钮只占左边三格，
+   右边会空出整整一格的死区（量过：容器 362px，最后一个按钮右边缘只到 269）。 */
 .scope {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
   gap: 3px;
   padding: 3px;
   margin-bottom: var(--gap-2);

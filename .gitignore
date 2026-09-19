@@ -39,3 +39,9 @@ tools/report*.txt
 .DS_Store
 Thumbs.db
 *.log
+
+# Vite 转译 vite.config.js 时写的临时文件，正常跑完会自动删掉。
+# 但沙箱的「批量删除守卫」在一轮对话里删够 50 个文件后就会开始拦删除
+# （走查脚本每跑一次就要清空 tools/shots/ 里 26 张截图），
+# 这些临时文件于是会留在仓库里 —— 实测漏进来过一次，所以加条规则兜住。
+vite.config.js.timestamp-*

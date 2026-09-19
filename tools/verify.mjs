@@ -216,7 +216,13 @@ const daysAgoStr = (n) => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 };
 
-// 在当月切「按周」，要落在含今天的那一周，而不是月初那一周（踩过这个坑）
+// 切换按钮上的字。四个格子横排在一起，一个字最清爽；
+// 断言写死文案，免得哪天手滑改回「按周 / 按月 / 按年」把格子撑长
+const scopeTexts = () => page.$$eval('[data-role="scope"] button', (els) => els.map((e) => e.innerText.trim()));
+check('账单：粒度按钮的字是「周 / 月 / 年 / 全部时间」',
+  (await scopeTexts()).join('/'), '周/月/年/全部时间');
+
+// 在当月切「周」，要落在含今天的那一周，而不是月初那一周（踩过这个坑）
 await clickEl('[data-role="scope"] [data-scope="week"]');
 await sleep(240);
 check('账单：按周能看到本周这 3 笔', await count('.tx'), 3);
@@ -291,6 +297,22 @@ await shot('stats-expense');
 
 /* ---- 统计：周 / 月 / 年 ---- */
 check('统计：默认按月的标题', await text('#view .card-title'), `${curMonth}总结`);
+// 统计页只有三格（没有「全部时间」）
+check('统计：粒度按钮的字是「周 / 月 / 年」',
+  (await page.$$eval('#view [data-role="scope"] button', (els) => els.map((e) => e.innerText.trim()))).join('/'),
+  '周/月/年');
+
+// 分栏要跟着按钮数走。以前 .scope 写死 repeat(4, 1fr)，统计页只有 3 个按钮，
+// 于是右边空出整整一格的死区（量过：容器 362px，最后一个按钮右边缘只到 269）。
+// 这类「看着改了、其实没铺满」的问题截图不容易发现，直接量像素。
+const scopeFit = await page.evaluate(() => {
+  const box = document.querySelector('#view [data-role="scope"]');
+  const btns = [...box.querySelectorAll('button')];
+  const bb = box.getBoundingClientRect();
+  const last = btns[btns.length - 1].getBoundingClientRect();
+  return { gap: Math.round(bb.right - last.right), n: btns.length };
+});
+check(`统计：${scopeFit.n} 个粒度按钮铺满整行（右侧只差内边距）`, scopeFit.gap <= 8, true);
 await clickEl('#view [data-role="scope"] [data-scope="week"]');
 await sleep(260);
 check('统计：按周的标题是日期区间', /^\d{1,2}月\d{1,2}日–/.test(await text('#view .m-label')), true);

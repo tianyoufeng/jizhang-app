@@ -4,7 +4,7 @@
  * 版本号。发新版时这五处要一起改，别只改一处：
  * 这里、package.json、android/app/build.gradle、ios 的 project.pbxproj、public/sw.js 的 CACHE。
  */
-export const APP_VERSION = '1.4';
+export const APP_VERSION = '1.5';
 
 /** 金额一律以「分」为单位存整数，避免小数计算误差 */
 
@@ -109,8 +109,13 @@ export function monthLabel(month) {
 /** 支持的粒度，顺序就是页面上切换按钮的顺序 */
 export const PERIOD_UNITS = ['week', 'month', 'year'];
 
-/** 切换按钮上的字 */
-export const PERIOD_BTN_TEXT = { week: '按周', month: '按月', year: '按年' };
+/**
+ * 切换按钮上的字。
+ * 就一个字：这四个按钮横排在一起，「周 / 月 / 年 / 全部时间」一眼能看全，
+ * 写成「按周 / 按月 / 按年」反而把格子撑长、和旁边的「全部时间」挤在一起。
+ * （标题、环比里的「上周 / 上月 / 上年」是另外两个常量，不动。）
+ */
+export const PERIOD_BTN_TEXT = { week: '周', month: '月', year: '年' };
 
 /** 「比上周 / 比上月 / 比上年」里的那个词 */
 export const PERIOD_PREV_TEXT = { week: '上周', month: '上月', year: '上年' };
