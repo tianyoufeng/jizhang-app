@@ -430,6 +430,86 @@ html[data-theme="dark"] #themeToggle .ico-sun {
 }
 .month-nav .m-arrow:disabled { opacity: .3; }
 
+/* 「自定义时间」那一条：整条都能点，右边挂个「修改」。
+   自定义区间下没有 ‹ › 可用 —— 区间是自己定的，谈不上「上一段 / 下一段」 */
+.range-bar {
+  width: 100%;
+  border: none;
+  font-family: inherit;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.range-bar .m-label { text-align: left; }
+.range-bar .rb-sub {
+  display: block;
+  margin-top: 3px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-3);
+}
+.range-bar .rb-edit {
+  flex: none;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--primary);
+  background: var(--primary-soft);
+  padding: 8px 12px;
+  border-radius: 9px;
+}
+
+/* ---------- 自定义时间面板（账单页、统计页共用） ---------- */
+.range-cap {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: var(--gap-3);
+}
+.range-fields {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+.range-field {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.range-field > span { font-size: 12px; color: var(--text-2); }
+.range-field input {
+  width: 100%;
+  min-width: 0;
+  padding: 10px 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 15px;
+  outline: none;
+}
+/* 安卓 / iOS 上原生日期控件的默认高度不一致，给个下限免得两边对不齐 */
+.range-field input[type="date"] { min-height: 44px; line-height: 1.2; }
+.range-field input:focus { border-color: var(--primary); }
+.range-sep {
+  flex: none;
+  padding-bottom: 12px;
+  color: var(--text-3);
+}
+.range-hint {
+  margin: 12px 0 0;
+  font-size: 13px;
+  color: var(--text-2);
+}
+.range-hint.error { color: var(--danger); }
+
 .summary {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

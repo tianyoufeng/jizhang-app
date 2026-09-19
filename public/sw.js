@@ -5,7 +5,7 @@
  * 之所以不做缓存优先 —— 这个 App 更新方式是重新部署网页，
  * 缓存优先会让用户一直跑旧版本；网络优先则在线时永远是最新的，断网照样能用。
  */
-const CACHE = 'jizhang-v1.5';
+const CACHE = 'jizhang-v1.6';
 
 self.addEventListener('install', () => {
   // 新版本立刻进入等待队列的下一轮，不等旧标签页关掉

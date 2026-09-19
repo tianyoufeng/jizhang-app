@@ -216,11 +216,32 @@ const daysAgoStr = (n) => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 };
 
-// 切换按钮上的字。四个格子横排在一起，一个字最清爽；
+// 切换按钮上的字。格子横排在一起，一个字最清爽；
 // 断言写死文案，免得哪天手滑改回「按周 / 按月 / 按年」把格子撑长
 const scopeTexts = () => page.$$eval('[data-role="scope"] button', (els) => els.map((e) => e.innerText.trim()));
-check('账单：粒度按钮的字是「周 / 月 / 年 / 全部时间」',
-  (await scopeTexts()).join('/'), '周/月/年/全部时间');
+check('账单：粒度按钮的字是「周 / 月 / 年 / 全部时间 / 自定义」',
+  (await scopeTexts()).join('/'), '周/月/年/全部时间/自定义');
+
+/**
+ * 量一排粒度按钮：有没有铺满整行、有没有哪个格子被字撑破。
+ * 这两种毛病截图都看不出来 —— 前者是空白，后者被 padding 盖住一点。
+ */
+const scopeFitOf = (sel) =>
+  page.evaluate((s) => {
+    const box = document.querySelector(s);
+    const btns = [...box.querySelectorAll('button')];
+    const bb = box.getBoundingClientRect();
+    const last = btns[btns.length - 1].getBoundingClientRect();
+    return {
+      n: btns.length,
+      right: Math.round(bb.right - last.right),
+      overflow: Math.max(...btns.map((b) => b.scrollWidth - Math.round(b.getBoundingClientRect().width)))
+    };
+  }, sel);
+
+const listFit = await scopeFitOf('[data-role="scope"]');
+check(`账单：${listFit.n} 个粒度按钮铺满整行`, listFit.right <= 8, true);
+check('账单：没有哪个按钮的字被格子压掉', listFit.overflow <= 0, true);
 
 // 在当月切「周」，要落在含今天的那一周，而不是月初那一周（踩过这个坑）
 await clickEl('[data-role="scope"] [data-scope="week"]');
@@ -297,22 +318,16 @@ await shot('stats-expense');
 
 /* ---- 统计：周 / 月 / 年 ---- */
 check('统计：默认按月的标题', await text('#view .card-title'), `${curMonth}总结`);
-// 统计页只有三格（没有「全部时间」）
-check('统计：粒度按钮的字是「周 / 月 / 年」',
+// 统计页没有「全部时间」（饼图和趋势得有个明确的时间段才有意义），但有「自定义」
+check('统计：粒度按钮的字是「周 / 月 / 年 / 自定义」',
   (await page.$$eval('#view [data-role="scope"] button', (els) => els.map((e) => e.innerText.trim()))).join('/'),
-  '周/月/年');
+  '周/月/年/自定义');
 
 // 分栏要跟着按钮数走。以前 .scope 写死 repeat(4, 1fr)，统计页只有 3 个按钮，
 // 于是右边空出整整一格的死区（量过：容器 362px，最后一个按钮右边缘只到 269）。
 // 这类「看着改了、其实没铺满」的问题截图不容易发现，直接量像素。
-const scopeFit = await page.evaluate(() => {
-  const box = document.querySelector('#view [data-role="scope"]');
-  const btns = [...box.querySelectorAll('button')];
-  const bb = box.getBoundingClientRect();
-  const last = btns[btns.length - 1].getBoundingClientRect();
-  return { gap: Math.round(bb.right - last.right), n: btns.length };
-});
-check(`统计：${scopeFit.n} 个粒度按钮铺满整行（右侧只差内边距）`, scopeFit.gap <= 8, true);
+const statsFit = await scopeFitOf('#view [data-role="scope"]');
+check(`统计：${statsFit.n} 个粒度按钮铺满整行（右侧只差内边距）`, statsFit.right <= 8, true);
 await clickEl('#view [data-role="scope"] [data-scope="week"]');
 await sleep(260);
 check('统计：按周的标题是日期区间', /^\d{1,2}月\d{1,2}日–/.test(await text('#view .m-label')), true);
@@ -350,6 +365,143 @@ await page.click('[data-role="pie"] .legend-row');
 await sleep(450);
 await shot('stats-drilldown-to-list');
 check('统计：点图例跳到账单明细', await count('.tx'), 1);
+
+/* ---- 自定义时间区间 ---- */
+// 「按周 / 按月 / 按年」是三档固定粒度，但「上个月 20 号到 8 号花了多少」这种问题
+// 得能自己圈一段时间。这一段把那条路走全：面板、快捷档、错值拦截、
+// 统计页的分桶与环比，以及从统计点回账单时区间要跟着走。
+
+// 区间标题的规则和 src/utils.js 的 rangeLabel 保持一致
+const yTag = (y) => (y === nowD.getFullYear() ? '' : `${y}年`);
+const rangeLabelOf = (a, b) => {
+  const [ay, am, ad] = a.split('-').map(Number);
+  const [by, bm, bd] = b.split('-').map(Number);
+  if (a === b) return `${yTag(ay)}${am}月${ad}日`;
+  const head = `${yTag(ay)}${am}月${ad}日`;
+  const tail = ay === by && am === bm ? `${bd}日` : `${yTag(by)}${bm}月${bd}日`;
+  return `${head}–${tail}`;
+};
+const monthLabelOf = (n) => {
+  const d = new Date(nowD);
+  d.setDate(d.getDate() - n);
+  return d.getFullYear() === nowD.getFullYear()
+    ? `${d.getMonth() + 1}月`
+    : `${d.getFullYear()}年${d.getMonth() + 1}月`;
+};
+
+await goTab('list');
+await clickEl('[data-role="scope"] [data-scope="custom"]');
+await page.waitForSelector('.sheet', { visible: true, timeout: 8000 });
+await sleep(240);
+await shot('range-picker');
+check('自定义：面板标题', await text('.sheet h3'), '自定义时间');
+check('自定义：快捷档齐全',
+  (await page.$$eval('.sheet [data-preset]', (els) => els.map((e) => e.innerText.trim()))).join('/'),
+  '近 7 天/近 30 天/近 3 个月/今年/去年');
+// 从「月」点进来时先垫上当前这个月，改两下就能用，不用从空白开始填
+check('自定义：初始区间垫的是当前这个月',
+  await page.$eval('.sheet [data-role="start"]', (el) => el.value),
+  `${nowD.getFullYear()}-${String(nowD.getMonth() + 1).padStart(2, '0')}-01`);
+
+await clickEl('.sheet [data-preset="d7"]');
+await sleep(240);
+const d7 = { start: daysAgoStr(6), end: daysAgoStr(0) };
+check('自定义：点「近 7 天」把两个日期填好',
+  `${await page.$eval('.sheet [data-role="start"]', (el) => el.value)}~${await page.$eval('.sheet [data-role="end"]', (el) => el.value)}`,
+  `${d7.start}~${d7.end}`);
+// 面板里日期和天数之间隔的是一个全角空格；读文本时会被折成普通空格
+check('自定义：提示算出天数', await text('.sheet [data-role="hint"]'),
+  `${rangeLabelOf(d7.start, d7.end)} 共 7 天`);
+check('自定义：命中的快捷档被点亮',
+  await page.$eval('.sheet [data-preset="d7"]', (el) => el.classList.contains('active')), true);
+
+await shot('range-picker-preset');
+await clickEl('.sheet-actions .btn-primary');
+await sleep(420);
+check('自定义：区间条显示这一段', await text('.range-bar .m-label'),
+  `${rangeLabelOf(d7.start, d7.end)} 共 7 天 · 点这里改时间`);
+// 三笔都记在今天，自然都落在近 7 天里
+check('自定义：近 7 天能看到那 3 笔', await count('.tx'), 3);
+check('自定义：合计对得上', (await sums())[1], '138.40');
+
+/** 在面板里手填两个日期（会触发 change，提示和确定键要跟着变） */
+const setRange = async (a, b) => {
+  for (const [role, v] of [['start', a], ['end', b]]) {
+    await page.$eval(`.sheet [data-role="${role}"]`, (el, val) => {
+      el.value = val;
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    }, v);
+  }
+  await sleep(240);
+};
+
+// 把区间挪到一段肯定没有账的日子：区间是真的在过滤，不是摆设
+await clickEl('[data-role="editrange"]');
+await page.waitForSelector('.sheet', { visible: true, timeout: 8000 });
+await sleep(220);
+await setRange(daysAgoStr(200), daysAgoStr(190));
+await clickEl('.sheet-actions .btn-primary');
+await sleep(420);
+check('自定义：挪到没有账的一段，列表空掉', await count('.tx'), 0);
+check('自定义：空提示说的是「这段时间」', await text('#view .empty'), '🗒️ 这段时间还没有记账');
+check('自定义：合计归零', (await sums())[1], '0.00');
+
+// 开始晚于结束：不偷偷换过来，直接说清楚并禁用确定 —— 换掉的话
+// 用户以为自己点错了，却看不出到底哪里错了
+await clickEl('[data-role="editrange"]');
+await page.waitForSelector('.sheet', { visible: true, timeout: 8000 });
+await sleep(220);
+await setRange(daysAgoStr(5), daysAgoStr(15));
+check('自定义：开始晚于结束会报错', await text('.sheet [data-role="hint"]'), '开始日期不能晚于结束日期');
+check('自定义：这种时候确定键是禁用的',
+  await page.$eval('.sheet-actions .btn-primary', (el) => el.disabled), true);
+await shot('range-picker-invalid');
+await clickEl('.sheet-actions .btn-outline');
+await sleep(380);
+check('自定义：取消不改动原来的区间', await text('.range-bar .m-label'),
+  `${rangeLabelOf(daysAgoStr(200), daysAgoStr(190))} 共 11 天 · 点这里改时间`);
+
+// 从自定义切回「月」，要落在刚才那段结尾所在的月份，而不是甩回今天
+await clickEl('[data-role="scope"] [data-scope="month"]');
+await sleep(340);
+check('自定义：切回「月」落在区间结尾那个月', await text('.m-label'), monthLabelOf(190));
+
+/* ---- 自定义区间 · 统计页 ---- */
+await goTab('stats');
+await clickEl('#view [data-role="scope"] [data-scope="custom"]');
+await page.waitForSelector('.sheet', { visible: true, timeout: 8000 });
+await sleep(220);
+await clickEl('.sheet [data-preset="d30"]');
+await sleep(220);
+await clickEl('.sheet-actions .btn-primary');
+await sleep(500);
+await shot('stats-custom-range');
+check('统计·自定义：总结的标题就是这一段',
+  await text('#view .card-title'), `${rangeLabelOf(daysAgoStr(29), daysAgoStr(0))}总结`);
+check('统计·自定义：合计和账单页一致', (await sums())[1], '138.40');
+// 自定义区间没有「上月」这个概念，环比就跟紧挨着它的、同样长的那一段比
+check('统计·自定义：环比说的是「上一段」', (await text('#view .delta')).includes('上一段'), true);
+// 30 天要是按天切就是 30 根柱子，横轴标签必然叠在一起，得自动放粗到按周
+check('统计·自定义：趋势标题写明按什么分桶', await text('#view .card:last-child .card-title'), '区间趋势 · 按周');
+
+// 一周之内则按天走，柱子和天数对得上
+await clickEl('#view [data-role="editrange"]');
+await page.waitForSelector('.sheet', { visible: true, timeout: 8000 });
+await sleep(220);
+await clickEl('.sheet [data-preset="d7"]');
+await sleep(220);
+await clickEl('.sheet-actions .btn-primary');
+await sleep(500);
+check('统计·自定义：一周内改成按天', await text('#view .card:last-child .card-title'), '区间趋势 · 按天');
+check('统计·自定义：7 天切出 7 组柱子', (await count('#view [data-role="trend"] svg rect')) / 2, 7);
+
+// 点饼图图例跳账单，账单页要看同一段，而不是被甩回本月
+await page.click('#view [data-role="pie"] .legend-row');
+await sleep(460);
+check('统计·自定义：点图例跳过去仍是同一段',
+  (await text('.range-bar .m-label')).startsWith(rangeLabelOf(d7.start, d7.end)), true);
+check('统计·自定义：带过去的是这个分类的明细', await count('.tx'), 1);
+await goTab('list');   // 回账单并清掉筛选，别影响后面的用例
 
 /* ---- 导出 CSV ---- */
 await goTab('settings');
@@ -681,7 +833,22 @@ await goTab('record');
 await fillRecordForm();
 await docShot('5-light');
 
-console.log(`\nREADME 截图 5 张 → ${DOCS}/`);
+// 6. 账单页：打开「自定义时间」面板 —— v1.6 的主打功能，光看列表页看不出来。
+//    上一张是浅色，这里先切回深色，别让同一组展示图深浅混着
+await tap('#themeToggle');
+await sleep(280);
+await goTab('list');
+await clickEl('[data-role="scope"] [data-scope="custom"]');
+await page.waitForSelector('.sheet', { visible: true, timeout: 8000 });
+await sleep(320);
+// 点亮一个快捷档，比一张空白面板有信息量
+await clickEl('.sheet [data-preset="m3"]');
+await sleep(300);
+await docShot('6-range');
+await clickEl('.sheet-actions .btn-outline');
+await sleep(420);
+
+console.log(`\nREADME 截图 6 张 → ${DOCS}/`);
 
 // 换回走查用的真机尺寸
 await page.setViewport({ width: 390, height: 844, deviceScaleFactor: 2, isMobile: true, hasTouch: true });

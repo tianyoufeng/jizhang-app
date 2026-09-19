@@ -49,8 +49,11 @@ export function toast(message, { ms = 2000, actionLabel = '', onAction = null } 
 /**
  * 打开一个从底部滑出的面板。
  * 返回一个带 close() 的句柄，方便在提交后自己关掉。
+ *
+ * onClose 会在面板关掉时回调一次（不管是点按钮还是点遮罩），
+ * 而且保证只回调一次 —— 用它把「关掉了」这个事实转成 Promise 的兜底结果。
  */
-export function openSheet({ title = '', body = '', actions = [] } = {}) {
+export function openSheet({ title = '', body = '', actions = [], onClose = null } = {}) {
   const root = document.getElementById('sheetRoot');
   const mask = document.createElement('div');
   mask.className = 'sheet-mask';
@@ -66,12 +69,17 @@ export function openSheet({ title = '', body = '', actions = [] } = {}) {
   if (typeof body === 'string') bodyEl.innerHTML = body;
   else bodyEl.appendChild(body);
 
+  let closed = false;
   const handle = {
     el: mask,
     body: bodyEl,
     close() {
+      // 可能被点两次（先点按钮、动画结束前又点到遮罩），只认第一次
+      if (closed) return;
+      closed = true;
       mask.style.animation = 'fade .15s reverse';
       setTimeout(() => mask.remove(), 140);
+      onClose?.();
     }
   };
 

@@ -4,7 +4,7 @@
  * 版本号。发新版时这五处要一起改，别只改一处：
  * 这里、package.json、android/app/build.gradle、ios 的 project.pbxproj、public/sw.js 的 CACHE。
  */
-export const APP_VERSION = '1.5';
+export const APP_VERSION = '1.6';
 
 /** 金额一律以「分」为单位存整数，避免小数计算误差 */
 
@@ -49,11 +49,20 @@ export function toDateStr(d) {
   return `${y}-${m}-${day}`;
 }
 
+/** 是不是一个合法的 'YYYY-MM-DD'（只看形状，不看这个日子存不存在） */
+export function isDateStr(s) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(s ?? ''));
+}
+
+/** 'YYYY-MM-DD' 加减天数 */
+export function shiftDay(dateStr, delta) {
+  const [y, m, d] = String(dateStr).split('-').map(Number);
+  return toDateStr(new Date(y, m - 1, d + delta));
+}
+
 /** 今天往前 n 天的日期字符串。dayAgo(0) 就是今天 */
 export function dayAgo(n = 0) {
-  const d = new Date();
-  d.setDate(d.getDate() - n);
-  return toDateStr(d);
+  return shiftDay(today(), -n);
 }
 
 /** 两个日期字符串相差多少天（b - a） */
@@ -104,9 +113,13 @@ export function monthLabel(month) {
  *   月 → 'YYYY-MM'
  *   年 → 'YYYY'
  * 这样按月份的旧字符串比较（'2026-09-14' >= '2026-09-01'）依然成立。
+ *
+ * 另外还有一个 'day' 粒度：它不出现在任何切换按钮上，
+ * 只在「自定义区间」的柱状图里当分桶用（区间短就一根柱子一天）。
+ * 顺着上面这套写法，它的键就是那一天的日期本身。
  */
 
-/** 支持的粒度，顺序就是页面上切换按钮的顺序 */
+/** 支持的粒度，顺序就是页面上切换按钮的顺序（不含只作内部用途的 'day'） */
 export const PERIOD_UNITS = ['week', 'month', 'year'];
 
 /**
@@ -121,13 +134,21 @@ export const PERIOD_BTN_TEXT = { week: '周', month: '月', year: '年' };
 export const PERIOD_PREV_TEXT = { week: '上周', month: '上月', year: '上年' };
 
 /** 「6 周 / 6 个月 / 6 年」里的量词 */
-export const PERIOD_WORD = { week: '周', month: '个月', year: '年' };
+export const PERIOD_WORD = { day: '天', week: '周', month: '个月', year: '年' };
+
+/**
+ * 「按天 / 按周 / 按月 / 按年」里的那个字。
+ * 和 PERIOD_WORD 不是一回事：那边跟着数字走（「6 个月」），这边单独用
+ * ——「按个月」这种说法不通。
+ */
+export const PERIOD_UNIT_TEXT = { day: '天', week: '周', month: '月', year: '年' };
 
 /** 「这一周还没有记账」里的主语 */
 export const PERIOD_THIS_TEXT = { week: '这一周', month: '这个月', year: '这一年' };
 
 /** 某一天属于哪个周期 */
 export function periodKey(unit, dateStr = today()) {
+  if (unit === 'day') return dateStr;
   if (unit === 'week') return weekStart(dateStr);
   if (unit === 'year') return dateStr.slice(0, 4);
   return monthOf(dateStr);
@@ -147,6 +168,7 @@ function weekStart(dateStr) {
 
 /** 周期键 → 日期区间，首尾都算在内 */
 export function periodRange(unit, key) {
+  if (unit === 'day') return { start: key, end: key };
   if (unit === 'week') {
     const [y, m, d] = key.split('-').map(Number);
     return { start: key, end: toDateStr(new Date(y, m - 1, d + 6)) };
@@ -161,6 +183,7 @@ export function periodRange(unit, key) {
 
 /** 周期键往前 / 往后挪 n 个周期 */
 export function shiftPeriod(unit, key, delta) {
+  if (unit === 'day') return shiftDay(key, delta);
   if (unit === 'week') {
     const [y, m, d] = key.split('-').map(Number);
     return toDateStr(new Date(y, m - 1, d + delta * 7));
@@ -206,6 +229,102 @@ export function periodAxisLabel(unit, key) {
   if (unit === 'month') return `${Number(key.slice(5))}月`;
   const [, m, d] = key.split('-').map(Number);
   return `${m}/${d}`;
+}
+
+/* ---------------- 自定义区间 ----------------
+ *
+ * 「按周 / 按月 / 按年」都是闭区间，自定义也只是闭区间，
+ * 所以底层查询统一收成 { start, end } 两个日期字符串，
+ * 周期查询在调用前换算成区间即可 —— 两条路共用一份逻辑。
+ */
+
+/** 不加限制的区间。日期按词典序比较，给足宽度就等于「全部时间」，不用再加分支 */
+export const ALL_TIME_RANGE = { start: '0000-01-01', end: '9999-12-31' };
+
+/** 区间里有几天（含首尾）。9月1日–9月1日 是 1 天 */
+export function rangeDays({ start, end }) {
+  return daysBetween(start, end) + 1;
+}
+
+/**
+ * 区间标题：'9月1日–19日'，跨月才补月份、跨年才补年份。
+ * 和 periodLabel 一个路子，只是周期换成了任意区间。
+ */
+export function rangeLabel({ start, end }) {
+  const nowYear = new Date().getFullYear();
+  const [sy, sm, sd] = start.split('-').map(Number);
+  const [ey, em, ed] = end.split('-').map(Number);
+  const yTag = (y) => (y === nowYear ? '' : `${y}年`);
+  if (start === end) return `${yTag(sy)}${sm}月${sd}日`;
+  const head = `${yTag(sy)}${sm}月${sd}日`;
+  const tail = sy === ey && sm === em ? `${ed}日` : `${yTag(ey)}${em}月${ed}日`;
+  return `${head}–${tail}`;
+}
+
+/**
+ * 紧挨着这个区间之前、长度相同的那一段。
+ * 统计页的环比要用：自定义区间没有「上周 / 上月」，但「上一个同样长的段」总是说得的。
+ */
+export function prevRange(range) {
+  const len = rangeDays(range);
+  return { start: shiftDay(range.start, -len), end: shiftDay(range.start, -1) };
+}
+
+/**
+ * 快捷档。与其让用户一个月一个月往回点，不如给几个常用跨度。
+ * 算出来的都是闭区间，终点一律是「今天」或整年的最后一天。
+ */
+export const RANGE_PRESETS = [
+  { id: 'd7', label: '近 7 天', days: 7 },
+  { id: 'd30', label: '近 30 天', days: 30 },
+  { id: 'm3', label: '近 3 个月', months: 3 },
+  { id: 'ytd', label: '今年' },
+  { id: 'last', label: '去年' }
+];
+
+export function presetRange(preset, ref = today()) {
+  if (preset.days) return { start: shiftDay(ref, -(preset.days - 1)), end: ref };
+  if (preset.months) {
+    // 「近 3 个月」按自然月算：从两个月前的 1 号到今天，正好盖住 3 个月份
+    const startMonth = shiftMonth(monthOf(ref), -(preset.months - 1));
+    return { start: `${startMonth}-01`, end: ref };
+  }
+  if (preset.id === 'ytd') return { start: `${ref.slice(0, 4)}-01-01`, end: ref };
+  if (preset.id === 'last') {
+    const y = Number(ref.slice(0, 4)) - 1;
+    return { start: `${y}-01-01`, end: `${y}-12-31` };
+  }
+  return { start: ref, end: ref };
+}
+
+/** 一个区间按某个粒度切，能切出几个桶（桶按日历对齐，首尾可能探出区间） */
+export function countBuckets(range, unit) {
+  let n = 0;
+  let k = periodKey(unit, range.start);
+  while (n < 400) {
+    if (periodRange(unit, k).start > range.end) break;
+    n += 1;
+    k = shiftPeriod(unit, k, 1);
+  }
+  return n;
+}
+
+/**
+ * 自定义区间的柱子该怎么分桶。
+ * 先按区间长短挑一个起始粒度（一个月内按天、半年内按周、四年内按月，再长按年），
+ * 再一级级放粗，直到柱子数不超标 —— 太密看不清，太疏看不出走向。
+ */
+export function bucketUnitFor(range, maxBuckets = 8) {
+  const days = rangeDays(range);
+  const ladder =
+    days <= 31 ? ['day', 'week', 'month', 'year']
+      : days <= 210 ? ['week', 'month', 'year']
+        : days <= 1460 ? ['month', 'year']
+          : ['year'];
+  for (const unit of ladder) {
+    if (countBuckets(range, unit) <= maxBuckets) return unit;
+  }
+  return ladder[ladder.length - 1];
 }
 
 export function escapeHtml(s) {

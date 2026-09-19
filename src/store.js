@@ -1,5 +1,7 @@
 import { db, newId } from './db.js';
-import { currentMonth, periodRange, periodAxisLabel, shiftPeriod, today } from './utils.js';
+import {
+  currentMonth, periodRange, periodKey, periodAxisLabel, shiftPeriod, bucketUnitFor, today
+} from './utils.js';
 
 /** 默认分类：支出 9 个，收入 5 个。
  *  图标一律挑 Unicode 9.0（2016）以前就有的，
@@ -294,23 +296,19 @@ export async function restoreTransaction(record) {
   await db.put('transactions', record);
 }
 
-/* ---------------- 查询与统计 ---------------- */
-
-/**
- * 某账本在某个周期里的记录，按日期倒序、同日按录入时间倒序。
+/* ---------------- 查询与统计 ----------------
  *
- * unit / key 是周期（'week' | 'month' | 'year' 配对应的键，见 utils.js）。
- * 原来参数写死是「月份」，账单页只能按月看；泛化成周期后，
- * 按周、按年走的是同一条查询路径，不用各写一份。
- *
- * scope='all' 时不再限制时间 —— 搜关键字要能跨全部时间找，
- * 否则想翻「三个月前那笔买空调的钱」得一个月一个月翻过去。
+ * 这一层按「日期闭区间」查：{ start, end } 两个 'YYYY-MM-DD' 字符串。
+ * 「按周 / 按月 / 按年」和「自定义区间」都是闭区间，区别只在区间从哪儿来 ——
+ * 周期查询在调用前用 periodRange 换算一下，于是两条路共用同一份逻辑，
+ * 不必为自定义区间再写一套（原来 periodTransactions 里那个 scope 分支就是这么没的）。
  */
-export function periodTransactions(unit, key, ledgerId = state.meta.currentLedgerId, { categoryId = '', keyword = '', scope = 'period' } = {}) {
+
+/** 某账本在区间里的记录，按日期倒序、同日按录入时间倒序 */
+export function rangeTransactions(range, ledgerId = state.meta.currentLedgerId, { categoryId = '', keyword = '' } = {}) {
   const kw = keyword.trim().toLowerCase();
-  const { start, end } = periodRange(unit, key);
   return transactionsOfLedger(ledgerId)
-    .filter((t) => scope === 'all' || (t.date >= start && t.date <= end))
+    .filter((t) => t.date >= range.start && t.date <= range.end)
     .filter((t) => !categoryId || t.categoryId === categoryId)
     .filter((t) => {
       if (!kw) return true;
@@ -320,26 +318,19 @@ export function periodTransactions(unit, key, ledgerId = state.meta.currentLedge
     .sort((a, b) => (a.date === b.date ? b.createdAt - a.createdAt : b.date.localeCompare(a.date)));
 }
 
-/** 某个周期的收支合计 */
-export function periodSummary(unit, key, ledgerId = state.meta.currentLedgerId) {
-  const { start, end } = periodRange(unit, key);
-  const list = transactionsOfLedger(ledgerId).filter((t) => t.date >= start && t.date <= end);
+/** 区间内的收支合计 */
+export function rangeSummary(range, ledgerId = state.meta.currentLedgerId) {
+  const list = transactionsOfLedger(ledgerId).filter((t) => t.date >= range.start && t.date <= range.end);
   const incomeFen = list.filter((t) => t.kind === 'income').reduce((a, t) => a + t.amountFen, 0);
   const expenseFen = list.filter((t) => t.kind === 'expense').reduce((a, t) => a + t.amountFen, 0);
   return { incomeFen, expenseFen, balanceFen: incomeFen - expenseFen, count: list.length };
 }
 
-/** 「本月」是个常用说法（预算、设置页都按自然月），留个直达的口子 */
-export function monthSummary(month, ledgerId = state.meta.currentLedgerId) {
-  return periodSummary('month', month, ledgerId);
-}
-
-/** 某周期某类型，按分类汇总成 Map<categoryId, { amountFen, count }> */
-export function categoryTotals(unit, key, kind, ledgerId = state.meta.currentLedgerId) {
-  const { start, end } = periodRange(unit, key);
+/** 区间内某类型，按分类汇总成 Map<categoryId, { amountFen, count }> */
+export function rangeCategoryTotals(range, kind, ledgerId = state.meta.currentLedgerId) {
   const map = new Map();
   for (const t of transactionsOfLedger(ledgerId)) {
-    if (t.kind !== kind || t.date < start || t.date > end) continue;
+    if (t.kind !== kind || t.date < range.start || t.date > range.end) continue;
     const entry = map.get(t.categoryId) || { amountFen: 0, count: 0 };
     entry.amountFen += t.amountFen;
     entry.count += 1;
@@ -348,9 +339,9 @@ export function categoryTotals(unit, key, kind, ledgerId = state.meta.currentLed
   return map;
 }
 
-/** 按分类汇总，金额从大到小 */
-export function categoryBreakdown(unit, key, kind, ledgerId = state.meta.currentLedgerId) {
-  const map = categoryTotals(unit, key, kind, ledgerId);
+/** 区间内按分类汇总，金额从大到小 */
+export function rangeCategoryBreakdown(range, kind, ledgerId = state.meta.currentLedgerId) {
+  const map = rangeCategoryTotals(range, kind, ledgerId);
   const total = [...map.values()].reduce((a, e) => a + e.amountFen, 0);
 
   return {
@@ -369,6 +360,50 @@ export function categoryBreakdown(unit, key, kind, ledgerId = state.meta.current
       })
       .sort((a, b) => b.amountFen - a.amountFen)
   };
+}
+
+/**
+ * 区间内的趋势，分桶粒度自动定（见 utils.js 的 bucketUnitFor）。
+ *
+ * 首尾两个桶可能探出区间（桶是按日历对齐的：周一 / 1 号 / 1 月 1 日），
+ * 统计前截回区间内 —— 否则「9月3日–9月10日」的第一根柱子会把
+ * 9 月 1 号、2 号的账也算进来，看着就像凭空多了一笔。
+ */
+export function rangeTrend(range, ledgerId = state.meta.currentLedgerId, maxBuckets = 8) {
+  const unit = bucketUnitFor(range, maxBuckets);
+  const out = [];
+  let k = periodKey(unit, range.start);
+  while (out.length < 400) {
+    const r = periodRange(unit, k);
+    if (r.start > range.end) break;
+    const clipped = {
+      start: r.start < range.start ? range.start : r.start,
+      end: r.end > range.end ? range.end : r.end
+    };
+    out.push({ key: k, unit, label: periodAxisLabel(unit, k), ...rangeSummary(clipped, ledgerId) });
+    k = shiftPeriod(unit, k, 1);
+  }
+  return out;
+}
+
+/** 某个周期的收支合计（周期 → 区间，之后转给 rangeSummary） */
+export function periodSummary(unit, key, ledgerId = state.meta.currentLedgerId) {
+  return rangeSummary(periodRange(unit, key), ledgerId);
+}
+
+/** 「本月」是个常用说法（预算、设置页都按自然月），留个直达的口子 */
+export function monthSummary(month, ledgerId = state.meta.currentLedgerId) {
+  return periodSummary('month', month, ledgerId);
+}
+
+/** 某周期某类型，按分类汇总成 Map<categoryId, { amountFen, count }> */
+export function categoryTotals(unit, key, kind, ledgerId = state.meta.currentLedgerId) {
+  return rangeCategoryTotals(periodRange(unit, key), kind, ledgerId);
+}
+
+/** 按分类汇总，金额从大到小 */
+export function categoryBreakdown(unit, key, kind, ledgerId = state.meta.currentLedgerId) {
+  return rangeCategoryBreakdown(periodRange(unit, key), kind, ledgerId);
 }
 
 /* ---------------- 分类预算 ---------------- */
